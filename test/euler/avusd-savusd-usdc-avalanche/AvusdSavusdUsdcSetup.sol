@@ -127,14 +127,21 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
     function _setupSwapper() internal override {
         swapper = new CeresSwapper(CERES_DEPLOYER, KYBER_SCALE_HELPER, AUGUSTUS_REGISTRY_AVAX);
 
-        vm.startPrank(management);
-        CeresSwapper.SwapProvider memory provider = CeresSwapper.SwapProvider({
+        CeresSwapper.SwapProvider memory kyberswapProvider = CeresSwapper.SwapProvider({
             swapType: CeresSwapper.SwapType.KYBERSWAP_AGGREGATOR,
             router: KYBERSWAP_ROUTER_AVAX
         });
 
-        swapper.setSwapProvider(address(collateralToken), address(debtToken), provider);
-        swapper.setSwapProvider(address(debtToken), address(collateralToken), provider);
+        CeresSwapper.SwapProvider memory paraswapProvider = CeresSwapper.SwapProvider({
+            swapType: CeresSwapper.SwapType.PARASWAP_AGGREGATOR,
+            router: AUGUSTUS_SWAPPER_AVAX
+        });
+
+        vm.startPrank(management);
+        swapper.setSwapProvider(address(collateralToken), address(debtToken), kyberswapProvider);
+        swapper.setSwapProvider(address(debtToken), address(collateralToken), kyberswapProvider);
+
+        swapper.setSwapProvider(address(assetToken), address(collateralToken), kyberswapProvider);
 
         vm.stopPrank();
     }

@@ -37,9 +37,11 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     address public constant KYBER_SCALE_HELPER = 0x2f577A41BeC1BE1152AeEA12e73b7391d15f655D;
     address public constant KYBERSWAP_ROUTER_AVAX = 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5;
 
-    address public constant AUGUSTUS_SWAPPER_V6 = 0x6A000F20005980200259B80c5102003040001068;
     address public constant AUGUSTUS_REGISTRY = 0xdC6E2b14260F972ad4e5a31c68294Fba7E720701;
     address public constant AUGUSTUS_REGISTRY_AVAX = 0xfD1E5821F07F1aF812bB7F3102Bfd9fFb279513a;
+
+    address public constant AUGUSTUS_SWAPPER_V6 = 0x6A000F20005980200259B80c5102003040001068;
+    address public constant AUGUSTUS_SWAPPER_AVAX = 0x6A000F20005980200259B80c5102003040001068;
 
     // Default test amounts (helper functions to account for different decimals)
     function DEFAULT_DEPOSIT() internal view returns (uint256) {
