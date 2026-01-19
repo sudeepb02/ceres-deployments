@@ -37,7 +37,6 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     address public constant KYBER_SCALE_HELPER = 0x2f577A41BeC1BE1152AeEA12e73b7391d15f655D;
     address public constant KYBERSWAP_ROUTER_AVAX = 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5;
 
-    
     address public constant AUGUSTUS_SWAPPER_V6 = 0x6A000F20005980200259B80c5102003040001068;
     address public constant AUGUSTUS_REGISTRY = 0xdC6E2b14260F972ad4e5a31c68294Fba7E720701;
     address public constant AUGUSTUS_REGISTRY_AVAX = 0xfD1E5821F07F1aF812bB7F3102Bfd9fFb279513a;
@@ -202,7 +201,20 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         // User deposits initial funds
         _setupUserDeposit(user1, initialDeposit);
 
-        // Asset and collateral are same (IS_ASSET_COLLATERAL = true)
+        if (!strategy.IS_ASSET_COLLATERAL()) {
+            // Need to swap and deposit the collateral first
+            uint256 assetBalance = _balance(address(assetToken), address(strategy));
+            bytes memory assetToCollateralSwapData = _getKyberswapSwapData(
+                block.chainid,
+                address(assetToken),
+                address(collateralToken),
+                assetBalance
+            );
+
+            vm.prank(keeper);
+            strategy.swapAndDepositCollateral(assetBalance, assetToCollateralSwapData);
+        }
+
         uint256 debtAmount = strategy.computeTargetDebt(initialDeposit, TARGET_LTV_BPS);
 
         // Mint debt tokens for keeper to perform initial leverage
