@@ -35,8 +35,12 @@ abstract contract LeveragedStrategyBaseSetup is Test {
 
     // Common contract addresses
     address public constant KYBER_SCALE_HELPER = 0x2f577A41BeC1BE1152AeEA12e73b7391d15f655D;
+    address public constant KYBERSWAP_ROUTER_AVAX = 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5;
+
+    
     address public constant AUGUSTUS_SWAPPER_V6 = 0x6A000F20005980200259B80c5102003040001068;
     address public constant AUGUSTUS_REGISTRY = 0xdC6E2b14260F972ad4e5a31c68294Fba7E720701;
+    address public constant AUGUSTUS_REGISTRY_AVAX = 0xfD1E5821F07F1aF812bB7F3102Bfd9fFb279513a;
 
     // Default test amounts (helper functions to account for different decimals)
     function DEFAULT_DEPOSIT() internal view returns (uint256) {
@@ -204,9 +208,23 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         // Mint debt tokens for keeper to perform initial leverage
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
+        // bytes memory swapData = _getParaswapSwapData(
+        //     block.chainid,
+        //     address(debtToken),
+        //     address(collateralToken),
+        //     debtAmount,
+        //     "exactIn"
+        // );
+        bytes memory swapData = _getKyberswapSwapData(
+            block.chainid,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         // Keeper performs initial leverage
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
     }
 
     /// @notice Helper to get balance
@@ -294,20 +312,10 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         address toToken,
         uint256 amount,
         address swapperAddress,
-        string memory swapType
-    ) internal returns (bytes memory) {
-        string[] memory inputs = new string[](8);
-        inputs[0] = "node";
-        inputs[1] = script;
-        inputs[2] = vm.toString(chainId);
-        inputs[3] = vm.toString(fromToken);
-        inputs[4] = vm.toString(toToken);
-        inputs[5] = vm.toString(amount);
-        inputs[6] = vm.toString(swapperAddress);
-        inputs[7] = swapType;
-
-        return vm.ffi(inputs);
-    }
+        string memory swapType,
+        uint8 fromTokenDecimals,
+        uint8 toTokenDecimals
+    ) internal returns (bytes memory) {}
 
     /// @notice Build Kyberswap swap data (exactIn)
     function _getKyberswapSwapData(
@@ -316,16 +324,17 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         address toToken,
         uint256 amount
     ) internal returns (bytes memory) {
-        return
-            _getAggregatorSwapData(
-                "script/js/kyber/printAggregatorSwapData.js",
-                chainId,
-                fromToken,
-                toToken,
-                amount,
-                address(swapper),
-                "exactIn"
-            );
+        string[] memory inputs = new string[](8);
+        inputs[0] = "node";
+        inputs[1] = "script/js/kyber/printKyberswapSwapData.js";
+        inputs[2] = vm.toString(chainId);
+        inputs[3] = vm.toString(fromToken);
+        inputs[4] = vm.toString(toToken);
+        inputs[5] = vm.toString(amount);
+        inputs[6] = vm.toString(address(swapper));
+        inputs[7] = "exactIn";
+
+        return vm.ffi(inputs);
     }
 
     /// @notice Build Paraswap swap data (supports exactIn/exactOut)
@@ -343,16 +352,22 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         console.log("Amount:", amount);
         console.log("Swap Type:", swapType);
 
-        return
-            _getAggregatorSwapData(
-                "script/js/paraswap/printParaswapSwapData.js",
-                chainId,
-                fromToken,
-                toToken,
-                amount,
-                address(swapper),
-                swapType
-            );
+        uint8 fromTokenDecimals = IERC20Metadata(fromToken).decimals();
+        uint8 toTokenDecimals = IERC20Metadata(toToken).decimals();
+
+        string[] memory inputs = new string[](10);
+        inputs[0] = "node";
+        inputs[1] = "script/js/paraswap/printParaswapSwapData.js";
+        inputs[2] = vm.toString(chainId);
+        inputs[3] = vm.toString(fromToken);
+        inputs[4] = vm.toString(toToken);
+        inputs[5] = vm.toString(amount);
+        inputs[6] = vm.toString(address(swapper));
+        inputs[7] = swapType;
+        inputs[8] = vm.toString(fromTokenDecimals);
+        inputs[9] = vm.toString(toTokenDecimals);
+
+        return vm.ffi(inputs);
     }
 
     /// @notice Rebalance using Kyberswap aggregator (exactIn only)
