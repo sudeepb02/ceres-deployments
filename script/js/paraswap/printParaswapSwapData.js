@@ -2,14 +2,21 @@ import { getParaswapSwapData } from "./paraswap.js";
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length < 5) {
+  if (args.length < 7) {
     console.error(
-      "Usage: node printParaswapSwapData.js <chainId> <fromToken> <toToken> <amount> <swapper> [swapType=exactIn]",
+      "Usage: node printParaswapSwapData.js <chainId> <fromToken> <toToken> <amount> <swapper> <fromTokenDecimals> <toTokenDecimals> [swapType=exactIn]",
     );
     process.exit(1);
   }
 
-  const [chainId, fromToken, toToken, amount, swapper, swapTypeArg] = args;
+  const chainId = args[0];
+  const fromToken = args[1];
+  const toToken = args[2];
+  const amount = args[3];
+  const swapper = args[4];
+  const fromTokenDecimals = args[args.length - 2];
+  const toTokenDecimals = args[args.length - 1];
+  const swapTypeArg = args.length > 7 ? args[5] : undefined;
   const swapType = swapTypeArg ?? "exactIn"; // use "exactOut" to build BUY
 
   try {
@@ -20,6 +27,8 @@ async function main() {
       amount,
       swapper,
       swapType,
+      fromTokenDecimals,
+      toTokenDecimals,
     });
 
     // Print raw data for Foundry ffi consumption

@@ -1,7 +1,6 @@
 import "dotenv/config";
 import axios from "axios";
 import { constructSimpleSDK, SwapSide } from "@paraswap/sdk";
-import { ethers } from "ethers";
 import { writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -17,33 +16,6 @@ function requiredParam(params, key) {
     throw new Error(`Missing required param: ${key}`);
   }
   return value;
-}
-
-function getProvider(chainId) {
-  const envKeyPrimary = `RPC_CHAINID_${chainId}`;
-  //   const rpcUrl = process.env.envKeyPrimary;
-  const rpcUrl =
-    "https://arb-mainnet.g.alchemy.com/v2/fsnUOifxtseIxdhw9Q5-OZk52F2hlSZY";
-  if (!rpcUrl) {
-    throw new Error(`Missing RPC url env var ${envKeyPrimary}`);
-  }
-  return new ethers.JsonRpcProvider(rpcUrl);
-}
-
-async function resolveDecimals(token, provider, provided) {
-  if (provided !== undefined && provided !== null) {
-    return Number(provided);
-  }
-
-  const erc20 = new ethers.Contract(
-    token,
-    ["function decimals() view returns (uint8)"],
-    provider,
-  );
-  const decimalDigits = await erc20.decimals();
-  console.log(`Resolved token decimals for ${token}: ${decimalDigits}`);
-
-  return decimalDigits;
 }
 
 function buildSdk(chainId) {
@@ -77,22 +49,12 @@ export async function getParaswapSwapData(params) {
   const amount = requiredParam(params, "amount");
   const swapType = requiredParam(params, "swapType"); // exactIn or exactOut
   const swapper = requiredParam(params, "swapper");
+  const fromTokenDecimals = Number(requiredParam(params, "fromTokenDecimals"));
+  const toTokenDecimals = Number(requiredParam(params, "toTokenDecimals"));
 
   const slippageBps = params.slippageBps
     ? Number(params.slippageBps)
     : DEFAULT_SLIPPAGE_BPS;
-  const provider = getProvider(chainId);
-
-  const srcDecimals = await resolveDecimals(
-    fromToken,
-    provider,
-    params.srcDecimals,
-  );
-  const destDecimals = await resolveDecimals(
-    toToken,
-    provider,
-    params.destDecimals,
-  );
 
   const sdk = buildSdk(chainId);
   const side = swapType === "exactOut" ? SwapSide.BUY : SwapSide.SELL;
@@ -101,8 +63,8 @@ export async function getParaswapSwapData(params) {
     srcToken: fromToken,
     destToken: toToken,
     amount,
-    srcDecimals,
-    destDecimals,
+    srcDecimals: fromTokenDecimals,
+    destDecimals: toTokenDecimals,
     side,
     options: {
       slippage: slippageBps,

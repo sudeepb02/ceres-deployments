@@ -7,6 +7,26 @@ export const AGGREGATOR_DOMAIN = `https://aggregator-api.kyberswap.com`;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const KYBER_CHAIN_SLUGS = {
+  1: "ethereum",
+  10: "optimism",
+  56: "bsc",
+  100: "xdai",
+  137: "polygon",
+  250: "fantom",
+  42161: "arbitrum",
+  43114: "avalanche",
+  8453: "base",
+};
+
+function chainSlug(chainId) {
+  const slug = KYBER_CHAIN_SLUGS[Number(chainId)];
+  if (!slug) {
+    throw new Error(`Unsupported Kyber chainId: ${chainId}`);
+  }
+  return slug;
+}
+
 function requiredParam(params, key) {
   const value = params[key];
   if (value === undefined || value === null || value === "") {
@@ -37,8 +57,9 @@ export async function getKyberSwapData(params) {
     throw new Error("Kyber helper currently supports exactIn only");
   }
 
-  const targetPathRoutes = `/${chainId}/api/v1/routes`;
-  const targetPathBuild = `/${chainId}/api/v1/route/build`;
+  const chain = chainSlug(chainId);
+  const targetPathRoutes = `/${chain}/api/v1/routes`;
+  const targetPathBuild = `/${chain}/api/v1/route/build`;
 
   const routeReq = {
     params: {
