@@ -190,12 +190,30 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         IERC20(token).approve(spender, amount);
     }
 
+    function _swapAssetsAndDepositCollateral(uint256 assetAmount) internal {
+        bytes memory assetToCollateralSwapData = _getKyberswapSwapData(
+            block.chainid,
+            address(assetToken),
+            address(collateralToken),
+            assetAmount
+        );
+
+        vm.prank(keeper);
+        strategy.swapAndDepositCollateral(assetAmount, assetToCollateralSwapData);
+    }
+
     /// @notice Setup user with tokens and deposits to strategy
     function _setupUserDeposit(address user, uint256 depositAmount) internal returns (uint256 shares) {
         _mintAndApprove(address(assetToken), user, address(strategy), depositAmount);
 
         vm.prank(user);
         shares = strategy.deposit(depositAmount, user);
+
+        if (!strategy.IS_ASSET_COLLATERAL()) {
+            // Need to swap and deposit the collateral first
+            uint256 assetBalance = _balance(address(assetToken), address(strategy));
+            _swapAssetsAndDepositCollateral(assetBalance);
+        }
     }
 
     /// @notice Setup strategy with initial leverage position
@@ -203,32 +221,11 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         // User deposits initial funds
         _setupUserDeposit(user1, initialDeposit);
 
-        if (!strategy.IS_ASSET_COLLATERAL()) {
-            // Need to swap and deposit the collateral first
-            uint256 assetBalance = _balance(address(assetToken), address(strategy));
-            bytes memory assetToCollateralSwapData = _getKyberswapSwapData(
-                block.chainid,
-                address(assetToken),
-                address(collateralToken),
-                assetBalance
-            );
-
-            vm.prank(keeper);
-            strategy.swapAndDepositCollateral(assetBalance, assetToCollateralSwapData);
-        }
-
         uint256 debtAmount = strategy.computeTargetDebt(initialDeposit, TARGET_LTV_BPS);
 
         // Mint debt tokens for keeper to perform initial leverage
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
-        // bytes memory swapData = _getParaswapSwapData(
-        //     block.chainid,
-        //     address(debtToken),
-        //     address(collateralToken),
-        //     debtAmount,
-        //     "exactIn"
-        // );
         bytes memory swapData = _getKyberswapSwapData(
             block.chainid,
             address(debtToken),

@@ -190,25 +190,17 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         _setupUserDeposit(user1, depositAmount);
 
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
-
-        console.log("debtAmount", debtAmount);
-
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
-        bytes memory res = _getParaswapSwapData(
+        bytes memory swapData = _getKyberswapSwapData(
             block.chainid,
             address(debtToken),
             address(collateralToken),
-            debtAmount,
-            "exactIn"
+            debtAmount
         );
 
-        console.log("Swap Data");
-        console.logBytes(res);
-        revert("test swap");
-
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
 
@@ -230,8 +222,15 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         uint256 collateralBefore = strategy.getCollateralAmount();
 
+        bytes memory swapData = _getKyberswapSwapData(
+            block.chainid,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         uint256 collateralAfter = strategy.getCollateralAmount();
         uint256 debt = strategy.getDebtAmount();
@@ -248,8 +247,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         _mintAndApprove(address(debtToken), keeper, address(strategy), deleverageAmount);
 
+        bytes memory swapData = _getParaswapSwapData(
+            block.chainid,
+            address(debtToken),
+            address(collateralToken),
+            deleverageAmount,
+            "exactOut"
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(deleverageAmount, false, "");
+        strategy.rebalance(deleverageAmount, false, swapData);
 
         (, , uint256 debtAfter) = strategy.getNetAssets();
 
