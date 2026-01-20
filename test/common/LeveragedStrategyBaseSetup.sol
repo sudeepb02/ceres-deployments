@@ -24,6 +24,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     address public constant CERES_DEPLOYER = 0xB9F4A819183BeFC31E282BC02D33cc1ab985Aa03;
 
     uint256 constant BPS_PRECISION = 10_000;
+    uint256 public CHAIN_ID;
 
     // LTV parameters - common across all protocols
     uint16 constant TARGET_LTV_BPS = 7000; // 70%
@@ -116,6 +117,8 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         user2 = makeAddr("user2");
         liquidityProvider = makeAddr("liquidityProvider");
         feeReceiver = makeAddr("feeReceiver");
+
+        CHAIN_ID = block.chainid;
 
         // Ensure TokenizedStrategy implementation exists
         _ensureTokenizedStrategyImplementation();

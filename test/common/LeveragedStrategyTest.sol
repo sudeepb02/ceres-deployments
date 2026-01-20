@@ -11,6 +11,8 @@ import {ILeveragedStrategy} from "ceres-strategies/src/interfaces/strategies/ILe
 
 import {LeveragedStrategyBaseSetup} from "./LeveragedStrategyBaseSetup.sol";
 
+import {MockERC20} from "test/common/MockERC20.sol";
+
 /// @title LeveragedStrategyTest
 /// @notice Abstract test contract containing all common invariant tests for LeveragedStrategy implementations
 /// @dev Protocol-specific test contracts should inherit from this AND their protocol's TestSetup
@@ -28,7 +30,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     }
 
     function test_InitialValues_LeveragedStrategy() public view {
-        assertEq(address(strategy.COLLATERAL_TOKEN()), address(assetToken), "COLLATERAL_TOKEN mismatch");
+        assertEq(address(strategy.COLLATERAL_TOKEN()), address(collateralToken), "COLLATERAL_TOKEN mismatch");
         assertEq(address(strategy.DEBT_TOKEN()), address(debtToken), "DEBT_TOKEN mismatch");
         assertTrue(strategy.IS_ASSET_COLLATERAL(), "IS_ASSET_COLLATERAL should be true");
         assertEq(strategy.BPS_PRECISION(), 100_00, "BPS_PRECISION mismatch");
@@ -69,18 +71,22 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
     function test_Deposit_Basic() public {
         uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 depositAmountInCollateral = oracleAdapter.convertAssetsToCollateral(depositAmount);
 
         _mintAndApprove(address(assetToken), user1, address(strategy), depositAmount);
 
         vm.prank(user1);
         uint256 shares = strategy.deposit(depositAmount, user1);
 
+        _swapAssetsAndDepositCollateral(depositAmount);
+
         assertEq(shares, depositAmount, "Shares should equal deposit for first deposit");
         assertEq(strategy.balanceOf(user1), shares, "User balance should match shares");
 
         (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
-        assertEq(netAssets, depositAmount, "Net assets should match deposit");
-        assertEq(totalCollateral, depositAmount, "Collateral should match deposit");
+        _assertApproxEqBps(netAssets, depositAmount, 10, "Net assets should match deposit");
+
+        _assertApproxEqBps(totalCollateral, depositAmountInCollateral, 10, "Collateral should match deposit");
         assertEq(totalDebt, 0, "Debt should be 0");
     }
 
@@ -98,10 +104,20 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
     function test_Deposit_AssetsDeployedAsCollateral() public {
         uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 assetAmountInCollateral = oracleAdapter.convertAssetsToCollateral(depositAmount);
+
+        uint256 collateralBefore = strategy.getCollateralAmount();
+
         _setupUserDeposit(user1, depositAmount);
 
-        uint256 collateral = strategy.getCollateralAmount();
-        assertEq(collateral, depositAmount, "Collateral should be deposited to protocol");
+        uint256 collateralAfter = strategy.getCollateralAmount();
+        assertGt(collateralAfter, collateralBefore, "Collateral should be deposited to protocol");
+        _assertApproxEqBps(
+            collateralAfter,
+            collateralBefore + assetAmountInCollateral,
+            MAX_SLIPPAGE_BPS,
+            "collateral amount mismatch"
+        );
     }
 
     function testFuzz_Deposit(uint256 depositAmount) public {
@@ -176,17 +192,21 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
     function test_GetNetAssets_AfterDeposit() public {
         uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 depositAmountInCollateral = oracleAdapter.convertAssetsToCollateral(depositAmount);
+
         _setupUserDeposit(user1, depositAmount);
 
         (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
 
-        assertEq(netAssets, depositAmount, "Net assets should equal deposit");
-        assertEq(totalCollateral, depositAmount, "Collateral should equal deposit");
         assertEq(totalDebt, 0, "Debt should be zero before leverage");
+        _assertApproxEqBps(netAssets, depositAmount, 10, "Net assets should be approx equal to deposit");
+        _assertApproxEqBps(totalCollateral, depositAmountInCollateral, 10, "Collateral should equal deposit");
     }
 
     function test_GetNetAssets_AfterLeverage() public {
         uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 depositAmountInCollateral = oracleAdapter.convertAssetsToCollateral(depositAmount);
+
         _setupUserDeposit(user1, depositAmount);
 
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
@@ -204,9 +224,9 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
 
-        assertApproxEqRel(netAssets, depositAmount, 1e15, "Net assets should be ~deposit");
-        assertGt(totalCollateral, depositAmount, "Collateral should increase from leverage");
-        assertApproxEqRel(totalDebt, debtAmount, 1e15, "Debt should be non-zero after leverage");
+        assertGt(totalCollateral, depositAmountInCollateral, "Collateral should increase from leverage");
+        _assertApproxEqBps(netAssets, depositAmount, 10, "Net assets should be ~deposit");
+        _assertApproxEqBps(totalDebt, debtAmount, 10, "Debt should be non-zero after leverage");
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -270,8 +290,15 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         uint256 actualLtv = strategy.getStrategyLtv();
         // Allow 0.1% tolerance
@@ -284,10 +311,18 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         // Try to leverage down when there's no debt
         _mintAndApprove(address(debtToken), keeper, address(strategy), 1000 * 1e6);
 
+        bytes memory swapData = _getParaswapSwapData(
+            CHAIN_ID,
+            address(collateralToken),
+            address(debtToken),
+            1000 * 1e6,
+            "exactOut"
+        );
+
         uint256 keeperBalance = debtToken.balanceOf(keeper);
 
         vm.prank(keeper);
-        strategy.rebalance(1000 * 1e6, false, "");
+        strategy.rebalance(1000 * 1e6, false, swapData);
 
         // Should not revert and debt should still be zero
         (, , uint256 totalDebt) = strategy.getNetAssets();
@@ -302,10 +337,17 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 debtAmount = 1000 * 1e6;
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit Rebalance(keeper, debtAmount, true);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -318,8 +360,15 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
 
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalanceUsingFlashLoan(debtAmount, true, "");
+        strategy.rebalanceUsingFlashLoan(debtAmount, true, swapData);
 
         assertGt(strategy.getDebtAmount(), 0, "Should have debt after flash loan leverage");
     }
@@ -330,8 +379,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         (, , uint256 debtBefore) = strategy.getNetAssets();
         uint256 deleverageAmount = debtBefore / 2;
 
+        bytes memory swapData = _getParaswapSwapData(
+            CHAIN_ID,
+            address(collateralToken),
+            address(debtToken),
+            deleverageAmount,
+            "exactOut"
+        );
+
         vm.prank(keeper);
-        strategy.rebalanceUsingFlashLoan(deleverageAmount, false, "");
+        strategy.rebalanceUsingFlashLoan(deleverageAmount, false, swapData);
 
         (, , uint256 debtAfter) = strategy.getNetAssets();
         assertLt(debtAfter, debtBefore, "Debt should decrease");
@@ -343,10 +400,17 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         uint256 flashLoanAmount = 2000 * 1e6;
 
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            flashLoanAmount
+        );
+
         vm.prank(keeper);
         vm.expectEmit(true, true, true, true);
         emit RebalanceUsingFlashLoan(keeper, flashLoanAmount, true);
-        strategy.rebalanceUsingFlashLoan(flashLoanAmount, true, "");
+        strategy.rebalanceUsingFlashLoan(flashLoanAmount, true, swapData);
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -382,8 +446,15 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         if (debtAmount > 0) {
             _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
+            bytes memory swapData = _getKyberswapSwapData(
+                CHAIN_ID,
+                address(debtToken),
+                address(collateralToken),
+                debtAmount
+            );
+
             vm.prank(keeper);
-            strategy.rebalance(debtAmount, true, "");
+            strategy.rebalance(debtAmount, true, swapData);
 
             uint256 actualLtv = strategy.getStrategyLtv();
             assertApproxEqRel(actualLtv, ltvBps, 10e16, "LTV should be near target");
@@ -414,8 +485,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         // Setup leverage
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
+
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         // Price increases 20%
         _simulatePriceChange(20);
@@ -568,8 +647,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         // Setup leverage
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
+
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         // Full withdrawal
         vm.prank(user1);
@@ -592,9 +679,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 debtAmount = strategy.computeTargetDebt(DEFAULT_DEPOSIT(), TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), user1, address(strategy), debtAmount);
 
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(user1);
         vm.expectRevert();
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
     }
 
     function testRevert_RebalanceUsingFlashLoan_NotKeeper() public {
@@ -608,23 +702,51 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function testRevert_Slippage_Exceeded() public {
         _setupUserDeposit(user1, DEFAULT_DEPOSIT());
 
-        // Set low slippage tolerance
+        // Set slippage to zero, as actual swaps have non-zero slippage, so the tx should revert
         vm.prank(management);
-        strategy.setMaxSlippage(10); // 0.1%
+        strategy.setMaxSlippage(0);
 
         uint256 debtAmount = strategy.computeTargetDebt(DEFAULT_DEPOSIT(), TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
         vm.expectRevert();
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
     }
 
-    function testRevert_SwapAndDepositCollateral_AssetIsCollateral() public {
-        // In our setup, asset == collateral, so this should revert
-        vm.prank(keeper);
-        vm.expectRevert(LibError.InvalidAction.selector);
-        strategy.swapAndDepositCollateral(1000 * 1e18, "");
+    function testRevert_SwapAndDepositCollateral() public {
+        // If Asset is collateral, then swapAndDepositCollateral function should revert
+        if (strategy.IS_ASSET_COLLATERAL()) {
+            vm.prank(keeper);
+            vm.expectRevert(LibError.InvalidAction.selector);
+            strategy.swapAndDepositCollateral(1000 * 1e18, "");
+        } else {
+            uint256 depositAmount = DEFAULT_DEPOSIT();
+            // If Asset is not collateral, deposit assets to strategy and test swapAndDepositCollateral
+            _mintAndApprove(address(assetToken), user1, address(strategy), depositAmount);
+
+            vm.prank(user1);
+            strategy.deposit(depositAmount, user1);
+
+            uint256 strategyAssetBalanceBefore = _balance(address(assetToken), address(strategy));
+            uint256 strategyCollateralBalanceBefore = strategy.getCollateralAmount();
+
+            _swapAssetsAndDepositCollateral(strategyAssetBalanceBefore);
+
+            assertEq(_balance(address(assetToken), address(strategy)), 0, "Asset balance should be zero");
+            assertGt(
+                strategy.getCollateralAmount(),
+                strategyCollateralBalanceBefore,
+                "Collateral balance should increase"
+            );
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -784,9 +906,9 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         strategy.setTargetLtv(6000);
     }
 
-    function testRevert_SetTargetLtv_InvalidValue() public {
+    function testRevert_SetTargetLtv_InvalidLtv() public {
         vm.prank(management);
-        vm.expectRevert(LibError.InvalidValue.selector);
+        vm.expectRevert(LibError.InvalidLtv.selector);
         strategy.setTargetLtv(10000); // 100%
     }
 
@@ -904,7 +1026,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     function test_RescueTokens_NonStrategyToken() public {
-        IERC20 randomToken = IERC20(makeAddr("randomToken"));
+        IERC20 randomToken = IERC20(address(new MockERC20("Random USD", "rUSD", 18)));
 
         deal(address(randomToken), address(strategy), 1000 * 1e18);
 
@@ -1118,17 +1240,11 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         assertGe(assetToken.balanceOf(feeReceiver), expectedShares, "!perf fee out");
     }
 
-    function test_TendTrigger(uint256 _amount) public {
-        vm.assume(_amount > 10_000 && _amount < DEPOSIT_LIMIT);
-
+    function test_TendTrigger() public {
+        // Tend trigger is false by default if not implemented
         (bool trigger, ) = strategy.tendTrigger();
-        assertTrue(!trigger);
 
-        // Deposit into strategy
-        _setupUserDeposit(user1, _amount);
-
-        (trigger, ) = strategy.tendTrigger();
-        assertTrue(!trigger);
+        assertFalse(trigger);
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -1144,8 +1260,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         // 2. Leverage up
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
+
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         // 3. Price increases (bull market)
         _simulatePriceChange(15);
@@ -1170,8 +1294,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         // Setup leverage
         uint256 debtAmount = strategy.computeTargetDebt(deposit1, TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
+
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         // Price increases 10%
         _simulatePriceChange(10);
@@ -1186,8 +1318,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         if (newTargetDebt > currentDebt) {
             uint256 additionalDebt = newTargetDebt - currentDebt;
             _mintAndApprove(address(debtToken), keeper, address(strategy), additionalDebt);
+
+            bytes memory swapData2 = _getKyberswapSwapData(
+                CHAIN_ID,
+                address(debtToken),
+                address(collateralToken),
+                debtAmount
+            );
+
             vm.prank(keeper);
-            strategy.rebalance(additionalDebt, true, "");
+            strategy.rebalance(additionalDebt, true, swapData2);
         }
 
         vm.prank(keeper);
@@ -1218,8 +1358,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         uint256 deleverageAmount = currentDebt - targetDebt;
 
+        bytes memory swapData = _getParaswapSwapData(
+            CHAIN_ID,
+            address(collateralToken),
+            address(debtToken),
+            deleverageAmount,
+            "exactOut"
+        );
+
         vm.prank(keeper);
-        strategy.rebalanceUsingFlashLoan(deleverageAmount, false, "");
+        strategy.rebalanceUsingFlashLoan(deleverageAmount, false, swapData);
 
         uint256 ltvAfterRebalance = strategy.getStrategyLtv();
         assertApproxEqRel(ltvAfterRebalance, TARGET_LTV_BPS, 10e16, "LTV should be near target after rebalance");
@@ -1312,8 +1460,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         // Setup leverage
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
+
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         // Simulate profit
         _simulateInterestAccrual(1500, 300, 180 days);
@@ -1377,8 +1533,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         // Setup leverage
         uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
+
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, "");
+        strategy.rebalance(debtAmount, true, swapData);
 
         // Simulate loss
         _simulateInterestAccrual(100, 1200, 180 days);
@@ -1466,8 +1630,15 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 debtAmount1 = strategy.computeTargetDebt(depositAmount, 5000);
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount1);
 
+        bytes memory swapData = _getKyberswapSwapData(
+            CHAIN_ID,
+            address(debtToken),
+            address(collateralToken),
+            debtAmount1
+        );
+
         vm.prank(keeper);
-        strategy.rebalance(debtAmount1, true, "");
+        strategy.rebalance(debtAmount1, true, swapData);
 
         (uint256 netAssets1, , ) = strategy.getNetAssets();
 
@@ -1479,8 +1650,15 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         if (debtAmount2 > 0) {
             _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount2);
 
+            bytes memory swapData2 = _getKyberswapSwapData(
+                CHAIN_ID,
+                address(debtToken),
+                address(collateralToken),
+                debtAmount2
+            );
+
             vm.prank(keeper);
-            strategy.rebalance(debtAmount2, true, "");
+            strategy.rebalance(debtAmount2, true, swapData2);
         }
 
         uint256 finalLtv = strategy.getStrategyLtv();

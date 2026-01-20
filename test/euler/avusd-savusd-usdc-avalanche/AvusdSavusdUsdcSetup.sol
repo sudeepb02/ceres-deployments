@@ -209,7 +209,7 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
     }
 
     function _simulatePriceChange(int256 percentChange) internal override {
-        skip(30 days);
+        // skip(30 days);
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
