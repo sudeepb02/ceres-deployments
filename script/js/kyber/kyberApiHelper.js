@@ -45,6 +45,20 @@ function writeOutputs(detailed, rawData) {
   return { detailedPath, rawPath };
 }
 
+// Recursive function to retry on 429 rate limiting errors
+async function retryWithWait(fn, retries = 5, delay = 2000) {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retries > 0 && error.response?.status === 429) {
+      const jitter = Math.floor(Math.random() * 1000);
+      await new Promise((resolve) => setTimeout(resolve, delay + jitter));
+      return retryWithWait(fn, retries - 1, delay * 1.5);
+    }
+    throw error;
+  }
+}
+
 export async function getKyberSwapData(params) {
   const chainId = requiredParam(params, "chainId");
   const fromToken = requiredParam(params, "fromToken");
@@ -73,46 +87,50 @@ export async function getKyberSwapData(params) {
     },
   };
 
-  const { data: routeResp } = await axios.get(
-    AGGREGATOR_DOMAIN + targetPathRoutes,
-    routeReq,
-  );
-  const routeSummary = routeResp.data.routeSummary;
+  try {
+    const { data: routeResp } = await retryWithWait(() =>
+      axios.get(AGGREGATOR_DOMAIN + targetPathRoutes, routeReq),
+    );
 
-  const buildBody = {
-    routeSummary,
-    sender: swapper,
-    recipient: swapper,
-    slippageTolerance: 100, // 1%
-  };
+    const routeSummary = routeResp.data.routeSummary;
 
-  const { data: buildResp } = await axios.post(
-    AGGREGATOR_DOMAIN + targetPathBuild,
-    buildBody,
-    {
-      headers: { "x-client-id": "ceres" },
-    },
-  );
+    const buildBody = {
+      routeSummary,
+      sender: swapper,
+      recipient: swapper,
+      slippageTolerance: 100, // 1%
+    };
 
-  const tx = buildResp.data;
-  if (!tx?.data) {
-    throw new Error("Kyber build returned empty data");
+    const { data: buildResp } = await retryWithWait(() =>
+      axios.post(AGGREGATOR_DOMAIN + targetPathBuild, buildBody, {
+        headers: { "x-client-id": "ceres" },
+      }),
+    );
+
+    const tx = buildResp.data;
+    if (!tx?.data) {
+      throw new Error("Kyber build returned empty data");
+    }
+
+    const detailed = {
+      chainId,
+      swapType,
+      fromToken,
+      toToken,
+      amount,
+      slippageBps: 100, // 1%
+      router: tx.router,
+      value: tx.value ?? "0",
+      gas: tx.gas,
+      data: tx.data,
+    };
+
+    return { detailed, raw: tx.data };
+  } catch (error) {
+    throw new Error(
+      `Kyber API request failed: ${error.response?.data?.message ?? error.message}`,
+    );
   }
-
-  const detailed = {
-    chainId,
-    swapType,
-    fromToken,
-    toToken,
-    amount,
-    slippageBps: 100, // 1%
-    router: tx.router,
-    value: tx.value ?? "0",
-    gas: tx.gas,
-    data: tx.data,
-  };
-
-  return { detailed, raw: tx.data };
 }
 
 export async function getSwapData(params) {
