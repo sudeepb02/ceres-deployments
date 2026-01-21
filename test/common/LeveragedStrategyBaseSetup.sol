@@ -163,19 +163,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     /// @notice Label addresses for debugging
     function _labelAddresses() internal virtual;
 
-    /// @notice Simulate interest accrual (protocol-specific)
-    /// @param interestRateBpsCollateral Collateral yield in BPS
-    /// @param interestRateBpsDebt Debt interest in BPS
-    /// @param timeElapsed Time elapsed in seconds
-    function _simulateInterestAccrual(
-        uint256 interestRateBpsCollateral,
-        uint256 interestRateBpsDebt,
-        uint256 timeElapsed
-    ) internal virtual;
-
-    /// @notice Simulate price change (protocol-specific due to oracle differences)
-    /// @param percentChange Percent change (positive or negative)
-    function _simulatePriceChange(int256 percentChange) internal virtual;
+    function _simulateCollateralPriceChange(int256 percentChange) internal virtual;
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                  COMMON HELPER FUNCTIONS                                 //
@@ -312,6 +300,83 @@ abstract contract LeveragedStrategyBaseSetup is Test {
             }
         }
         assertGt(size, 0, "!TokenizedStrategy");
+    }
+
+    function _getRebalanceAmountForRedeem(uint256 redeemShares) internal view returns (uint256) {
+        uint256 withdrawAmount = strategy.convertToAssets(redeemShares);
+        return _getRebalanceAmountForWithdraw(withdrawAmount);
+    }
+
+    function _getRebalanceAmountForWithdraw(uint256 withdrawAmount) internal view returns (uint256) {
+        (uint256 netAssets, , uint256 totalDebt) = strategy.getNetAssets();
+        if (withdrawAmount > netAssets) {
+            withdrawAmount = netAssets;
+        }
+
+        uint256 targetDebt = strategy.computeTargetDebt(netAssets - withdrawAmount, strategy.config().targetLtvBps);
+        uint256 rebalanceAmount = totalDebt > targetDebt ? totalDebt - targetDebt : 0;
+        return rebalanceAmount;
+    }
+
+    function _rebalanceUsingKeeper(uint256 rebalanceAmount, bool isLeverageUp) internal {
+        if (rebalanceAmount == 0) return;
+
+        // Mint rebalance amount to the keeper address
+        _mintAndApprove(address(debtToken), keeper, address(strategy), rebalanceAmount);
+
+        if (isLeverageUp) {
+            // Leverage up: DEBT -> COLLATERAL
+            bytes memory swapData = _getKyberswapSwapData(
+                block.chainid,
+                address(debtToken),
+                address(collateralToken),
+                rebalanceAmount
+            );
+
+            vm.prank(keeper);
+            strategy.rebalance(rebalanceAmount, true, swapData);
+        } else {
+            // Deleverage: COLLATERAL -> DEBT
+            bytes memory swapData = _getParaswapSwapData(
+                block.chainid,
+                address(collateralToken),
+                address(debtToken),
+                rebalanceAmount,
+                "exactOut"
+            );
+
+            vm.prank(keeper);
+            strategy.rebalance(rebalanceAmount, false, swapData);
+        }
+    }
+
+    function _rebalanceUsingFlashLoan(uint256 rebalanceAmount, bool isLeverageUp) internal {
+        if (rebalanceAmount == 0) return;
+
+        if (isLeverageUp) {
+            // Leverage up: DEBT -> COLLATERAL
+            bytes memory swapData = _getKyberswapSwapData(
+                block.chainid,
+                address(debtToken),
+                address(collateralToken),
+                rebalanceAmount
+            );
+
+            vm.prank(keeper);
+            strategy.rebalanceUsingFlashLoan(rebalanceAmount, true, swapData);
+        } else {
+            // Deleverage: COLLATERAL -> DEBT
+            bytes memory swapData = _getParaswapSwapData(
+                block.chainid,
+                address(collateralToken),
+                address(debtToken),
+                rebalanceAmount,
+                "exactOut"
+            );
+
+            vm.prank(keeper);
+            strategy.rebalanceUsingFlashLoan(rebalanceAmount, false, swapData);
+        }
     }
 
     /*//////////////////////////////////////////////////////////////
