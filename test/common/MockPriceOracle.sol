@@ -1,7 +1,7 @@
 pragma solidity 0.8.28;
 
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {LibError} from "src/libraries/LibError.sol";
+import {LibError} from "ceres-strategies/src/libraries/LibError.sol";
 
 import "forge-std/src/console2.sol";
 
@@ -49,7 +49,7 @@ contract MockPriceOracle {
 
         // Calculate adjusted price: basePrice * (10000 + percentChangeBps) / 10000
         // This handles both positive and negative percentage changes
-        int256 adjustedPriceSigned = (price * (BPS_DENOMINATOR + PERCENT_CHANGE_BPS)) / BPS_DENOMINATOR;
+        int256 adjustedPriceSigned = (price * (BPS_DENOMINATOR + percentageChangeBps)) / BPS_DENOMINATOR;
 
         // Safety check
         require(adjustedPriceSigned > 0, "MockPriceOracle: adjusted price must be > 0");
