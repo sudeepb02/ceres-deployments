@@ -18,3 +18,9 @@ dependencies/
 
 debug_output.txt
 
+
+script/js/kyber/swapOutputDetailed.txt
+script/js/kyber/swapOutputRaw.txt
+
+script/js/paraswap/swapOutputDetailed.txt
+script/js/paraswap/swapOutputRaw.txt
