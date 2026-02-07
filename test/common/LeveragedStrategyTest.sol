@@ -8,6 +8,8 @@ import {IERC20Metadata} from "@openzeppelin-contracts/token/ERC20/extensions/IER
 
 import {LibError} from "ceres-strategies/src/libraries/LibError.sol";
 import {ILeveragedStrategy} from "ceres-strategies/src/interfaces/strategies/ILeveragedStrategy.sol";
+import {ICeresBaseStrategy} from "ceres-strategies/src/interfaces/strategies/ICeresBaseStrategy.sol";
+import {LeverageLib} from "ceres-strategies/src/libraries/LeverageLib.sol";
 
 import {LeveragedStrategyBaseSetup} from "./LeveragedStrategyBaseSetup.sol";
 
@@ -18,15 +20,30 @@ import {MockERC20} from "test/common/MockERC20.sol";
 /// @dev Protocol-specific test contracts should inherit from this AND their protocol's TestSetup
 abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                                         EVENTS                                            //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    // Async withdrawal events
+    event RedeemRequest(
+        address indexed controller,
+        address indexed owner_,
+        uint256 indexed requestId,
+        address requester,
+        uint256 shares
+    );
+
+    event RequestProcessed(uint256 indexed requestId, uint256 totalShares, uint256 pricePerShare);
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                  SETUP VERIFICATION TESTS                                 //
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     function test_SetupStrategy_IsValid() public view {
         assertTrue(address(0) != address(strategy), "Strategy should be deployed");
         assertEq(strategy.asset(), address(assetToken), "Asset should match");
-        assertEq(strategy.management(), management, "Management should match");
         assertEq(strategy.performanceFeeRecipient(), feeReceiver, "Fee receiver should match");
-        assertEq(strategy.keeper(), keeper, "Keeper should match");
+        assertTrue(roleManager.hasRole(MANAGEMENT_ROLE, management), "Management should match");
+        assertTrue(roleManager.hasRole(KEEPER_ROLE, keeper), "Keeper should match");
     }
 
     function test_InitialValues_LeveragedStrategy() public view {
@@ -38,28 +55,23 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         assertEq(address(strategy.oracleAdapter()), address(oracleAdapter), "oracleAdapter mismatch");
         assertEq(address(strategy.swapper()), address(swapper), "swapper mismatch");
 
-        ILeveragedStrategy.StrategyConfig memory config = strategy.config();
-        assertEq(config.targetLtvBps, TARGET_LTV_BPS, "targetLtvBps mismatch");
-        assertEq(config.maxSlippageBps, MAX_SLIPPAGE_BPS, "maxSlippageBps mismatch");
-        assertEq(config.depositLimit, DEPOSIT_LIMIT, "depositLimit mismatch");
-        assertEq(config.withdrawLimit, WITHDRAW_LIMIT, "withdrawLimit mismatch");
+        assertEq(strategy.targetLtvBps(), TARGET_LTV_BPS, "targetLtvBps mismatch");
+        assertEq(strategy.maxSlippageBps(), MAX_SLIPPAGE_BPS, "maxSlippageBps mismatch");
+        assertEq(strategy.depositLimit(), DEPOSIT_LIMIT, "depositLimit mismatch");
+        assertEq(strategy.redeemLimitShares(), REDEEM_LIMIT_SHARES, "redeemLimit mismatch");
     }
 
     function test_InitialValues_BaseStrategy() public view {
         assertEq(address(strategy.asset()), address(assetToken), "asset mismatch");
-        assertEq(strategy.tokenizedStrategyAddress(), TOKENIZED_STRATEGY_IMPL, "tokenizedStrategyAddress mismatch");
 
         assertTrue(management != address(0), "management should not be zero");
-        assertEq(strategy.management(), management, "management address mismatch");
+        assertTrue(roleManager.hasRole(MANAGEMENT_ROLE, management), "Management should match");
 
         assertTrue(keeper != address(0), "keeper should not be zero");
-        assertEq(strategy.keeper(), keeper, "keeper address mismatch");
+        assertTrue(roleManager.hasRole(KEEPER_ROLE, keeper), "Keeper should match");
 
-        assertEq(strategy.pendingManagement(), address(0), "pendingManagement should be zero");
-        assertEq(strategy.emergencyAdmin(), management, "emergencyAdmin mismatch");
         assertEq(strategy.performanceFeeRecipient(), feeReceiver, "performanceFeeRecipient mismatch");
-        assertEq(strategy.performanceFee(), 1000, "performanceFee should be 1000 (10%)");
-        assertFalse(strategy.isShutdown(), "strategy should not be shutdown");
+        assertEq(strategy.performanceFeeBps(), 1500, "performanceFee should be 1500 (15%)");
 
         assertEq(strategy.totalSupply(), 0, "totalSupply should be 0");
         assertEq(strategy.totalAssets(), 0, "totalAssets should be 0");
@@ -139,33 +151,53 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 depositAmount = DEFAULT_DEPOSIT();
         _setupUserDeposit(user1, depositAmount);
 
-        uint256 withdrawAmount = depositAmount / 2;
+        uint256 shares = strategy.balanceOf(user1);
+        uint256 sharesToRedeem = shares / 2;
 
-        vm.prank(user1);
-        strategy.withdraw(withdrawAmount, user1, user1);
+        // Phase 1: Request redeem
+        _requestRedeemAs(user1, sharesToRedeem);
 
-        assertEq(assetToken.balanceOf(user1), withdrawAmount, "User should receive withdrawn amount");
+        // Phase 2: Process request
+        _processCurrentRequest("");
+
+        // Phase 3: Complete redeem
+        uint256 assets = _redeemAs(user1, sharesToRedeem);
+
+        assertApproxEqRel(assets, depositAmount / 2, 1e15, "User should receive ~half of deposited amount");
+        assertEq(strategy.balanceOf(user1), shares - sharesToRedeem, "User should have remaining shares");
     }
 
     function test_Withdraw_Partial() public {
         uint256 depositAmount = DEFAULT_DEPOSIT();
         uint256 shares = _setupUserDeposit(user1, depositAmount);
 
-        uint256 withdrawShares = shares / 4; // 25%
+        uint256 sharesToRedeem = shares / 4; // 25%
 
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(withdrawShares, user1, user1);
+        // Phase 1: Request redeem
+        _requestRedeemAs(user1, sharesToRedeem);
+
+        // Phase 2: Process request
+        _processCurrentRequest("");
+
+        // Phase 3: Complete redeem
+        uint256 assets = _redeemAs(user1, sharesToRedeem);
 
         assertApproxEqRel(assets, depositAmount / 4, 1e15, "Should receive ~25% of assets");
-        assertEq(strategy.balanceOf(user1), shares - withdrawShares, "Remaining shares mismatch");
+        assertEq(strategy.balanceOf(user1), shares - sharesToRedeem, "Remaining shares mismatch");
     }
 
     function test_Withdraw_AllShares() public {
         uint256 depositAmount = DEFAULT_DEPOSIT();
         uint256 shares = _setupUserDeposit(user1, depositAmount);
 
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(shares, user1, user1);
+        // Phase 1: Request redeem
+        _requestRedeemAs(user1, shares);
+
+        // Phase 2: Process request
+        _processCurrentRequest("");
+
+        // Phase 3: Complete redeem
+        uint256 assets = _redeemAs(user1, shares);
 
         assertApproxEqRel(assets, depositAmount, 1e15, "Should receive all deposited assets");
         assertEq(strategy.balanceOf(user1), 0, "Should have no remaining shares");
@@ -176,14 +208,608 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         withdrawPercent = bound(withdrawPercent, 10, 100);
 
         uint256 shares = _setupUserDeposit(user1, depositAmount);
+        uint256 sharesToRedeem = (shares * withdrawPercent) / 100;
 
-        uint256 withdrawShares = (shares * withdrawPercent) / 100;
+        // Phase 1: Request redeem
+        _requestRedeemAs(user1, sharesToRedeem);
 
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(withdrawShares, user1, user1);
+        // Phase 2: Process request
+        _processCurrentRequest("");
+
+        // Phase 3: Complete redeem
+        uint256 assets = _redeemAs(user1, sharesToRedeem);
 
         assertGt(assets, 0, "Should receive assets");
         assertApproxEqRel(assets, (depositAmount * withdrawPercent) / 100, 1e16, "Should receive proportional assets");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                              ASYNC WITHDRAWAL TESTS                                       //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                          PHASE 1: REQUEST REDEEM TESTS                                    //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test basic redeem request functionality
+    function test_RequestRedeem_Basic() public {
+        uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, depositAmount);
+
+        uint256 sharesToRedeem = shares / 2;
+        uint256 initialStrategyBalance = strategy.balanceOf(address(strategy));
+
+        // Request redemption
+        vm.expectEmit(true, true, true, true);
+        emit RedeemRequest(user1, user1, 1, user1, sharesToRedeem);
+
+        uint256 requestId = _requestRedeemAs(user1, sharesToRedeem);
+
+        // Verify request ID
+        assertEq(requestId, 1, "First request should be requestId 1");
+
+        // Verify shares transferred to strategy
+        assertEq(
+            strategy.balanceOf(address(strategy)),
+            initialStrategyBalance + sharesToRedeem,
+            "Shares should be transferred to strategy"
+        );
+        assertEq(strategy.balanceOf(user1), shares - sharesToRedeem, "User shares should decrease");
+
+        // Verify user request state
+        ICeresBaseStrategy.UserRedeemRequest memory userRequest = strategy.userRedeemRequests(user1);
+        assertEq(userRequest.requestId, requestId, "User requestId should be set");
+        assertEq(userRequest.shares, sharesToRedeem, "User shares should be recorded");
+
+        // Verify request details
+        ICeresBaseStrategy.RequestDetails memory details = strategy.requestDetails(requestId);
+        assertEq(details.totalShares, sharesToRedeem, "Request totalShares should be updated");
+        assertEq(details.pricePerShare, 0, "Request should not be processed yet");
+    }
+
+    /// @notice Test multiple users requesting in same batch
+    function test_RequestRedeem_MultipleUsersInBatch() public {
+        uint256 deposit1 = DEFAULT_DEPOSIT();
+        uint256 deposit2 = DEFAULT_DEPOSIT() * 2;
+
+        uint256 shares1 = _setupUserDeposit(user1, deposit1);
+        uint256 shares2 = _setupUserDeposit(user2, deposit2);
+
+        uint256 redeem1 = shares1 / 2;
+        uint256 redeem2 = shares2 / 3;
+
+        // Both users request in same batch (requestId 1)
+        uint256 requestId1 = _requestRedeemAs(user1, redeem1);
+        uint256 requestId2 = _requestRedeemAs(user2, redeem2);
+
+        assertEq(requestId1, 1, "Should be requestId 1");
+        assertEq(requestId1, requestId2, "Both should be in same requestId");
+
+        // Verify batch total
+        ICeresBaseStrategy.RequestDetails memory details = strategy.requestDetails(requestId1);
+        assertEq(details.totalShares, redeem1 + redeem2, "Total shares should be sum of both requests");
+
+        // Verify individual user states
+        ICeresBaseStrategy.UserRedeemRequest memory user1Request = strategy.userRedeemRequests(user1);
+        ICeresBaseStrategy.UserRedeemRequest memory user2Request = strategy.userRedeemRequests(user2);
+        assertEq(user1Request.shares, redeem1, "User1 shares mismatch");
+        assertEq(user2Request.shares, redeem2, "User2 shares mismatch");
+    }
+
+    /// @notice Test user requesting multiple times in same batch
+    function test_RequestRedeem_IncrementalSameUser() public {
+        uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, depositAmount);
+
+        uint256 firstRequest = shares / 4;
+        uint256 secondRequest = shares / 4;
+
+        // First request
+        uint256 requestId1 = _requestRedeemAs(user1, firstRequest);
+
+        // Second request (same batch)
+        uint256 requestId2 = _requestRedeemAs(user1, secondRequest);
+
+        assertEq(requestId1, requestId2, "Should be same requestId");
+
+        // Verify cumulative shares
+        ICeresBaseStrategy.UserRedeemRequest memory userRequest = strategy.userRedeemRequests(user1);
+        assertEq(userRequest.shares, firstRequest + secondRequest, "Shares should accumulate");
+
+        // Verify batch total
+        ICeresBaseStrategy.RequestDetails memory details = strategy.requestDetails(requestId1);
+        assertEq(details.totalShares, firstRequest + secondRequest, "Batch total should include both requests");
+    }
+
+    /// @notice Test reverting when user has existing pending request in different batch
+    function testRevert_RequestRedeem_ExistingPendingRequest() public {
+        uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, depositAmount);
+
+        // Request in batch 1
+        _requestRedeemAs(user1, shares / 4);
+
+        // Process batch 1 (moves to batch 2)
+        _processCurrentRequest("");
+
+        // Don't claim yet - user still has pending request in batch 1
+
+        // Try to request in batch 2 (should fail because batch 1 not claimed)
+        vm.expectRevert(LibError.ExistingPendingRedeemRequest.selector);
+        _requestRedeemAs(user1, shares / 4);
+    }
+
+    /// @notice Test reverting when requesting more shares than owned
+    function testRevert_RequestRedeem_InsufficientShares() public {
+        uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, depositAmount);
+
+        vm.expectRevert();
+        _requestRedeemAs(user1, shares * 2);
+    }
+
+    /// @notice Test reverting when requesting zero shares
+    function testRevert_RequestRedeem_ZeroShares() public {
+        _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+
+        vm.expectRevert(LibError.ZeroShares.selector);
+        _requestRedeemAs(user1, 0);
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                        PHASE 2: PROCESS REQUEST TESTS                                     //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test processing request sets pricePerShare
+    function test_ProcessRequest_SetsPricePerShare() public {
+        uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, depositAmount);
+
+        uint256 requestId = _requestRedeemAs(user1, shares / 2);
+
+        // Before processing
+        uint128 pricePerShareBefore = strategy.requestDetails(requestId).pricePerShare;
+        assertEq(pricePerShareBefore, 0, "Price per share should be 0 before processing");
+
+        // Process
+        vm.expectEmit(true, false, false, false);
+        emit RequestProcessed(requestId, 0, 0); // We'll check actual values separately
+        _processCurrentRequest("");
+
+        // After processing
+        uint128 pricePerShareAfter = strategy.requestDetails(requestId).pricePerShare;
+        assertGt(pricePerShareAfter, 0, "Price per share should be set after processing");
+    }
+
+    /// @notice Test processing with idle funds (no deleverage needed)
+    function test_ProcessRequest_WithIdleFunds() public {
+        uint256 depositAmount = DEFAULT_DEPOSIT();
+        _setupUserDeposit(user1, depositAmount);
+
+        uint256 shares = strategy.balanceOf(user1);
+        uint256 sharesToRedeem = shares / 4; // Only 25%, plenty of idle funds
+
+        uint256 requestId = _requestRedeemAs(user1, sharesToRedeem);
+
+        uint128 reserveBefore = strategy.withdrawalReserve();
+
+        // Process (should use idle funds)
+        _processCurrentRequest("");
+
+        uint128 reserveAfter = strategy.withdrawalReserve();
+
+        // Verify withdrawal reserve increased
+        assertGt(reserveAfter, reserveBefore, "Withdrawal reserve should increase");
+
+        // Verify requestId incremented
+        assertEq(strategy.currentRequestId(), requestId + 1, "Current requestId should increment");
+    }
+
+    /// @notice Test processing increments currentRequestId
+    function test_ProcessRequest_IncrementsRequestId() public {
+        _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+
+        uint256 currentIdBefore = strategy.currentRequestId();
+
+        _requestRedeemAs(user1, strategy.balanceOf(user1) / 2);
+        _processCurrentRequest("");
+
+        uint256 currentIdAfter = strategy.currentRequestId();
+
+        assertEq(currentIdAfter, currentIdBefore + 1, "CurrentRequestId should increment");
+    }
+
+    /// @notice Test reverting when trying to process with no requests
+    function testRevert_ProcessRequest_NoRequestsToProcess() public {
+        _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        _requestRedeemAs(user1, strategy.balanceOf(user1) / 2);
+
+        // Process existing request
+        _processCurrentRequest("");
+
+        // Try to process again without any new requests
+        vm.expectRevert(LibError.NoRequestsToProcess.selector);
+        vm.prank(keeper);
+        strategy.processCurrentRequest("");
+    }
+
+    /// @notice Test only keeper can process requests
+    function testRevert_ProcessRequest_OnlyKeeper() public {
+        _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        _requestRedeemAs(user1, strategy.balanceOf(user1) / 2);
+
+        // Non-keeper tries to process
+        vm.expectRevert();
+        vm.prank(user1);
+        strategy.processCurrentRequest("");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                        PHASE 3: COMPLETE REDEEM TESTS                                     //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test completing redeem after processing
+    function test_CompleteRedeem_AfterProcessing() public {
+        uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, depositAmount);
+
+        uint256 sharesToRedeem = shares / 2;
+
+        // Request and process
+        uint256 requestId = _requestRedeemAs(user1, sharesToRedeem);
+        _processCurrentRequest("");
+
+        uint256 reserveBefore = strategy.withdrawalReserve();
+        uint256 strategySharesBefore = strategy.balanceOf(address(strategy));
+
+        // Complete redeem
+        uint256 assetsReceived = _redeemAs(user1, sharesToRedeem);
+
+        // Verify assets received
+        assertGt(assetsReceived, 0, "Should receive assets");
+        assertApproxEqRel(assetsReceived, depositAmount / 2, 1e15, "Should receive ~half of deposit");
+
+        // Verify shares burned from strategy
+        assertEq(
+            strategy.balanceOf(address(strategy)),
+            strategySharesBefore - sharesToRedeem,
+            "Shares should be burned from strategy"
+        );
+
+        // Verify withdrawal reserve decreased
+        assertLt(strategy.withdrawalReserve(), reserveBefore, "Withdrawal reserve should decrease");
+
+        // Verify user balance
+        assertApproxEqRel(assetToken.balanceOf(user1), assetsReceived, 1e15, "User should have received assets");
+    }
+
+    /// @notice Test reverting when trying to redeem before processing
+    function testRevert_CompleteRedeem_NotYetProcessed() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+
+        // Request but don't process
+        _requestRedeemAs(user1, shares / 2);
+
+        // Try to redeem
+        vm.expectRevert(LibError.WithdrawalNotReady.selector);
+        _redeemAs(user1, shares / 2);
+    }
+
+    /// @notice Test reverting when trying to redeem more than processed
+    function testRevert_CompleteRedeem_ExceedsProcessedAmount() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+
+        uint256 requestedShares = shares / 2;
+
+        // Request and process
+        _requestRedeemAs(user1, requestedShares);
+        _processCurrentRequest("");
+
+        // Try to redeem more than requested
+        vm.expectRevert();
+        _redeemAs(user1, requestedShares * 2);
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                    VIEW FUNCTIONS & STATE TESTS                                           //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                          VIEW FUNCTION: pendingRedeemRequest                              //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test pendingRedeemRequest returns correct shares before processing
+    function test_PendingRedeemRequest_BeforeProcessing() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        uint256 sharesToRedeem = shares / 2;
+
+        uint256 requestId = _requestRedeemAs(user1, sharesToRedeem);
+
+        // Should return requested shares since not yet processed
+        uint256 pending = strategy.pendingRedeemRequest(requestId, user1);
+        assertEq(pending, sharesToRedeem, "Should return pending shares");
+    }
+
+    /// @notice Test pendingRedeemRequest returns 0 after processing
+    function test_PendingRedeemRequest_AfterProcessing() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        uint256 sharesToRedeem = shares / 2;
+
+        uint256 requestId = _requestRedeemAs(user1, sharesToRedeem);
+        _processCurrentRequest("");
+
+        // Should return 0 since request is processed
+        uint256 pending = strategy.pendingRedeemRequest(requestId, user1);
+        assertEq(pending, 0, "Should return 0 after processing");
+    }
+
+    /// @notice Test pendingRedeemRequest for multiple users in same batch
+    function test_PendingRedeemRequest_MultipleUsers() public {
+        uint256 shares1 = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        uint256 shares2 = _setupUserDeposit(user2, DEFAULT_DEPOSIT() * 2);
+
+        uint256 redeem1 = shares1 / 2;
+        uint256 redeem2 = shares2 / 3;
+
+        uint256 requestId = _requestRedeemAs(user1, redeem1);
+        _requestRedeemAs(user2, redeem2); // Same batch
+
+        // Both should show their respective pending amounts
+        assertEq(strategy.pendingRedeemRequest(requestId, user1), redeem1, "User1 pending mismatch");
+        assertEq(strategy.pendingRedeemRequest(requestId, user2), redeem2, "User2 pending mismatch");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                          VIEW FUNCTION: claimableRedeemRequest                            //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test claimableRedeemRequest returns 0 before processing
+    function test_ClaimableRedeemRequest_BeforeProcessing() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        uint256 requestId = _requestRedeemAs(user1, shares / 2);
+
+        // Should return 0 since not processed yet
+        uint256 claimable = strategy.claimableRedeemRequest(requestId, user1);
+        assertEq(claimable, 0, "Should return 0 before processing");
+    }
+
+    /// @notice Test claimableRedeemRequest returns shares after processing
+    function test_ClaimableRedeemRequest_AfterProcessing() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        uint256 sharesToRedeem = shares / 2;
+
+        uint256 requestId = _requestRedeemAs(user1, sharesToRedeem);
+        _processCurrentRequest("");
+
+        // Should return claimable shares
+        uint256 claimable = strategy.claimableRedeemRequest(requestId, user1);
+        assertEq(claimable, sharesToRedeem, "Should return claimable shares");
+    }
+
+    /// @notice Test claimableRedeemRequest returns 0 after claiming
+    function test_ClaimableRedeemRequest_AfterClaiming() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        uint256 sharesToRedeem = shares / 2;
+
+        uint256 requestId = _requestRedeemAs(user1, sharesToRedeem);
+        _processCurrentRequest("");
+        _redeemAs(user1, sharesToRedeem);
+
+        // Should return 0 since already claimed
+        uint256 claimable = strategy.claimableRedeemRequest(requestId, user1);
+        assertEq(claimable, 0, "Should return 0 after claiming");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                          VIEW FUNCTION: maxRedeem                                         //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test maxRedeem returns 0 before processing
+    function test_MaxRedeem_BeforeProcessing() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        _requestRedeemAs(user1, shares / 2);
+
+        // Should return 0 since not processed
+        uint256 maxRedeemable = strategy.maxRedeem(user1);
+        assertEq(maxRedeemable, 0, "Should return 0 before processing");
+    }
+
+    /// @notice Test maxRedeem returns shares after processing
+    function test_MaxRedeem_AfterProcessing() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        uint256 sharesToRedeem = shares / 2;
+
+        _requestRedeemAs(user1, sharesToRedeem);
+        _processCurrentRequest("");
+
+        // Should return redeemable shares
+        uint256 maxRedeemable = strategy.maxRedeem(user1);
+        assertEq(maxRedeemable, sharesToRedeem, "Should return redeemable shares");
+    }
+
+    /// @notice Test maxRedeem returns 0 when no pending request
+    function test_MaxRedeem_NoPendingRequest() public {
+        _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+
+        // No request made
+        uint256 maxRedeemable = strategy.maxRedeem(user1);
+        assertEq(maxRedeemable, 0, "Should return 0 with no request");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                          VIEW FUNCTION: maxWithdraw                                       //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test maxWithdraw returns 0 before processing
+    function test_MaxWithdraw_BeforeProcessing() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        _requestRedeemAs(user1, shares / 2);
+
+        // Should return 0 since not processed
+        uint256 maxWithdrawable = strategy.maxWithdraw(user1);
+        assertEq(maxWithdrawable, 0, "Should return 0 before processing");
+    }
+
+    /// @notice Test maxWithdraw returns assets after processing
+    function test_MaxWithdraw_AfterProcessing() public {
+        uint256 depositAmount = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, depositAmount);
+        uint256 sharesToRedeem = shares / 2;
+
+        _requestRedeemAs(user1, sharesToRedeem);
+        _processCurrentRequest("");
+
+        // Should return withdrawable assets
+        uint256 maxWithdrawable = strategy.maxWithdraw(user1);
+        assertGt(maxWithdrawable, 0, "Should return withdrawable assets");
+        assertApproxEqRel(maxWithdrawable, depositAmount / 2, 1e15, "Should be ~half of deposit");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                          WITHDRAWAL RESERVE ACCOUNTING TESTS                              //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test withdrawalReserve increases when request is processed
+    function test_WithdrawalReserve_IncreasesOnProcess() public {
+        _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+
+        uint128 reserveBefore = strategy.withdrawalReserve();
+
+        _requestRedeemAs(user1, strategy.balanceOf(user1) / 2);
+        _processCurrentRequest("");
+
+        uint128 reserveAfter = strategy.withdrawalReserve();
+
+        assertGt(reserveAfter, reserveBefore, "Withdrawal reserve should increase");
+    }
+
+    /// @notice Test withdrawalReserve decreases when request is redeemed
+    function test_WithdrawalReserve_DecreasesOnRedeem() public {
+        uint256 shares = _setupUserDeposit(user1, DEFAULT_DEPOSIT());
+        uint256 sharesToRedeem = shares / 2;
+
+        _requestRedeemAs(user1, sharesToRedeem);
+        _processCurrentRequest("");
+
+        uint128 reserveBefore = strategy.withdrawalReserve();
+
+        _redeemAs(user1, sharesToRedeem);
+
+        uint128 reserveAfter = strategy.withdrawalReserve();
+
+        assertLt(reserveAfter, reserveBefore, "Withdrawal reserve should decrease");
+    }
+
+    /// @notice Test withdrawalReserve with multiple outstanding processed requests
+    function test_WithdrawalReserve_MultipleOutstanding() public {
+        uint256 deposit = DEFAULT_DEPOSIT();
+
+        // Batch 1: User1 requests
+        uint256 shares1 = _setupUserDeposit(user1, deposit);
+        _requestRedeemAs(user1, shares1 / 2);
+        _processCurrentRequest("");
+
+        uint128 reserveAfter1 = strategy.withdrawalReserve();
+        assertGt(reserveAfter1, 0, "Reserve should be non-zero after first batch");
+
+        // Batch 2: User2 requests
+        uint256 shares2 = _setupUserDeposit(user2, deposit);
+        _requestRedeemAs(user2, shares2 / 3);
+        _processCurrentRequest("");
+
+        uint128 reserveAfter2 = strategy.withdrawalReserve();
+        assertGt(reserveAfter2, reserveAfter1, "Reserve should increase with second batch");
+
+        // User1 claims - reserve should decrease but still > 0 (user2 hasn't claimed)
+        _redeemAs(user1, shares1 / 2);
+
+        uint128 reserveAfter3 = strategy.withdrawalReserve();
+        assertLt(reserveAfter3, reserveAfter2, "Reserve should decrease after user1 claim");
+        assertGt(reserveAfter3, 0, "Reserve should still be positive (user2 unclaimed)");
+
+        // User2 claims - reserve should go to ~0
+        _redeemAs(user2, shares2 / 3);
+
+        uint128 reserveAfter4 = strategy.withdrawalReserve();
+        assertLt(reserveAfter4, reserveAfter3, "Reserve should decrease after user2 claim");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                          MULTI-USER ASYNC SCENARIOS                                       //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Test multiple users in same batch get same pricePerShare
+    function test_MultiUser_SameBatch_SamePricePerShare() public {
+        uint256 deposit1 = DEFAULT_DEPOSIT();
+        uint256 deposit2 = DEFAULT_DEPOSIT() * 2;
+
+        uint256 shares1 = _setupUserDeposit(user1, deposit1);
+        uint256 shares2 = _setupUserDeposit(user2, deposit2);
+
+        // Both request in same batch
+        uint256 requestId = _requestRedeemAs(user1, shares1 / 2);
+        _requestRedeemAs(user2, shares2 / 2);
+
+        _processCurrentRequest("");
+
+        // Both should have same pricePerShare
+        uint128 pricePerShare = strategy.requestDetails(requestId).pricePerShare;
+        assertGt(pricePerShare, 0, "Price per share should be set");
+
+        // User1 claims
+        uint256 assets1 = _redeemAs(user1, shares1 / 2);
+
+        // User2 claims later
+        uint256 assets2 = _redeemAs(user2, shares2 / 2);
+
+        // Both should get proportional assets based on same price
+        assertApproxEqRel(assets1, deposit1 / 2, 1e15, "User1 should get ~half deposit");
+        assertApproxEqRel(assets2, deposit2 / 2, 1e15, "User2 should get ~half deposit");
+    }
+
+    /// @notice Test user can request new batch after claiming previous
+    function test_MultiUser_SequentialRequestsAfterClaim() public {
+        uint256 deposit = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, deposit);
+
+        // Batch 1: Request and complete
+        uint256 requestId1 = _requestRedeemAs(user1, shares / 4);
+        _processCurrentRequest("");
+        _redeemAs(user1, shares / 4);
+
+        // Now user1 can request again (batch 2)
+        uint256 requestId2 = _requestRedeemAs(user1, shares / 4);
+        _processCurrentRequest("");
+
+        assertEq(requestId2, 2, "Should be batch 2");
+        assertNotEq(requestId1, requestId2, "Should be different batches");
+
+        // Should be able to claim batch 2
+        uint256 assets = _redeemAs(user1, shares / 4);
+        assertGt(assets, 0, "Should receive assets from batch 2");
+    }
+
+    /// @notice Test partial redemption from processed request
+    function test_EdgeCase_PartialRedemption() public {
+        uint256 deposit = DEFAULT_DEPOSIT();
+        uint256 shares = _setupUserDeposit(user1, deposit);
+        uint256 sharesToRedeem = shares / 2;
+
+        _requestRedeemAs(user1, sharesToRedeem);
+        _processCurrentRequest("");
+
+        // Redeem only half of what was requested
+        uint256 partialShares = sharesToRedeem / 2;
+        uint256 assets1 = _redeemAs(user1, partialShares);
+        assertGt(assets1, 0, "Should receive assets from partial redeem");
+
+        // Redeem remaining
+        uint256 remainingShares = sharesToRedeem - partialShares;
+        uint256 assets2 = _redeemAs(user1, remainingShares);
+        assertGt(assets2, 0, "Should receive remaining assets");
+
+        // Total should approximate half of deposit
+        assertApproxEqRel(assets1 + assets2, deposit / 2, 1e15, "Total should be ~half deposit");
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -209,7 +835,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         _setupUserDeposit(user1, depositAmount);
 
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -237,7 +863,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 depositAmount = DEFAULT_DEPOSIT();
         _setupUserDeposit(user1, depositAmount);
 
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         uint256 collateralBefore = strategy.getCollateralAmount();
@@ -287,7 +913,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 depositAmount = DEFAULT_DEPOSIT();
         _setupUserDeposit(user1, depositAmount);
 
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -358,7 +984,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 depositAmount = DEFAULT_DEPOSIT();
         _setupUserDeposit(user1, depositAmount);
 
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
 
         bytes memory swapData = _getKyberswapSwapData(
             CHAIN_ID,
@@ -376,22 +1002,40 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_RebalanceUsingFlashLoan_LeverageDown() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (, , uint256 debtBefore) = strategy.getNetAssets();
-        uint256 deleverageAmount = debtBefore / 2;
+        (uint256 netAssets, uint256 totalCollateral, uint256 debt) = strategy.getNetAssets();
+        uint256 deleverageAmount = debt / 2;
+        
+        console.log("netAssets before", netAssets);
+        console.log("totalCollateral before", totalCollateral);
+        console.log("debt before", debt);
+        console.log("deleverageAmount", deleverageAmount);
 
-        bytes memory swapData = _getParaswapSwapData(
-            CHAIN_ID,
-            address(collateralToken),
-            address(debtToken),
-            deleverageAmount,
-            "exactOut"
-        );
+
+
+        bytes memory swapData;
+        if (strategy.isExactOutSwapEnabled()) {
+            swapData = _getParaswapSwapData(
+                CHAIN_ID,
+                address(collateralToken),
+                address(debtToken),
+                deleverageAmount,
+                "exactOut"
+            );
+        } else {
+            swapData = _getKyberswapSwapData(CHAIN_ID, address(collateralToken), address(debtToken), deleverageAmount);
+        }
 
         vm.prank(keeper);
         strategy.rebalanceUsingFlashLoan(deleverageAmount, false, swapData);
 
-        (, , uint256 debtAfter) = strategy.getNetAssets();
-        assertLt(debtAfter, debtBefore, "Debt should decrease");
+        // (, , uint256 debtAfter) = strategy.getNetAssets();
+
+        uint256 debtAfter;
+        (netAssets, totalCollateral, debtAfter) = strategy.getNetAssets();
+        console.log("netAssets after", netAssets);
+        console.log("totalCollateral after", totalCollateral);
+        console.log("debt after", debtAfter);
+        assertLt(debtAfter, debt, "Debt should decrease");
     }
 
     function test_RebalanceUsingFlashLoan_EmitsEvent() public {
@@ -420,7 +1064,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_GetLeverage_AfterLeverageUp() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        uint256 leverage = strategy.getLeverage();
+        uint256 leverage = _getCurrentLeverage();
 
         // At 70% LTV, leverage should be approximately 3.33x (33333 BPS)
         assertGt(leverage, 33000, "Leverage should be greater than 3.3x");
@@ -442,7 +1086,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         _setupUserDeposit(user1, depositAmount);
 
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, ltvBps);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, ltvBps, strategy.oracleAdapter());
         if (debtAmount > 0) {
             _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
@@ -470,8 +1114,8 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
 
-        // Simulate 10% price increase
-        _simulatePriceChange(10);
+        // Simulate 10% price increase for Collateral token (1000 BPS = 10%)
+        _simulateCollateralPriceChange(1000);
 
         (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
 
@@ -483,7 +1127,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 shares = _setupUserDeposit(user1, depositAmount);
 
         // Setup leverage
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -497,34 +1141,34 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         strategy.rebalance(debtAmount, true, swapData);
 
         // Price increases 20%
-        _simulatePriceChange(20);
+        _simulateCollateralPriceChange(2000);
 
         vm.prank(keeper);
-        strategy.report();
-        skip(strategy.profitMaxUnlockTime());
+        strategy.harvestAndReport();
 
         uint256 withdrawShares = shares / 4;
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(withdrawShares, user1, user1);
+        _requestRedeemAs(user1, withdrawShares);
+        _processCurrentRequest("");
+        uint256 assets = _redeemAs(user1, withdrawShares);
 
         assertGt(assets, 0, "Should receive assets after price increase");
         assertGt(assets, depositAmount / 4, "Should receive more than initial deposit proportionally");
     }
 
-    function testFuzz_PriceChange(int256 priceChangePercent) public {
-        priceChangePercent = bound(priceChangePercent, -25, 50);
+    function testFuzz_PriceChange(int256 priceChangePercentBps) public {
+        priceChangePercentBps = bound(priceChangePercentBps, -25_00, 50_00);
 
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
         (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
 
-        _simulatePriceChange(priceChangePercent);
+        _simulateCollateralPriceChange(priceChangePercentBps);
 
         (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
 
-        if (priceChangePercent > 0) {
+        if (priceChangePercentBps > 0) {
             assertGt(netAssetsAfter, netAssetsBefore, "Should gain on price increase");
-        } else if (priceChangePercent < 0) {
+        } else if (priceChangePercentBps < 0) {
             assertLt(netAssetsAfter, netAssetsBefore, "Should lose on price decrease");
         }
 
@@ -542,7 +1186,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
 
         // Simulate 10% price decrease
-        _simulatePriceChange(-10);
+        _simulateCollateralPriceChange(-1000);
 
         (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
 
@@ -555,7 +1199,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
 
         // Simulate 10% price decrease
-        _simulatePriceChange(-10);
+        _simulateCollateralPriceChange(-1000);
 
         (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
 
@@ -570,7 +1214,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
         // Simulate significant price drop (15%)
-        _simulatePriceChange(-15);
+        _simulateCollateralPriceChange(-1500);
 
         uint256 currentLtv = strategy.getStrategyLtv();
 
@@ -586,7 +1230,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
         // Simulate 12% price drop
-        _simulatePriceChange(-12);
+        _simulateCollateralPriceChange(-1200);
 
         (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
 
@@ -604,13 +1248,13 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
         // Rapid price changes
-        _simulatePriceChange(5);
+        _simulateCollateralPriceChange(500);
         (uint256 netAssets1, , ) = strategy.getNetAssets();
 
-        _simulatePriceChange(-8);
+        _simulateCollateralPriceChange(-800);
         (uint256 netAssets2, , ) = strategy.getNetAssets();
 
-        _simulatePriceChange(3);
+        _simulateCollateralPriceChange(300);
         (uint256 netAssets3, , ) = strategy.getNetAssets();
 
         // Strategy should handle volatility without reverting
@@ -625,9 +1269,10 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 shares = strategy.balanceOf(user1);
         uint256 withdrawShares = shares / 2;
 
-        // Withdrawing should trigger deleveraging
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(withdrawShares, user1, user1);
+        // Withdrawing should trigger deleveraging via async flow
+        _requestRedeemAs(user1, withdrawShares);
+        _processCurrentRequest("");
+        uint256 assets = _redeemAs(user1, withdrawShares);
 
         assertGt(assets, 0, "Should receive assets");
 
@@ -645,7 +1290,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 shares = _setupUserDeposit(user1, depositAmount);
 
         // Setup leverage
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -658,9 +1303,10 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         vm.prank(keeper);
         strategy.rebalance(debtAmount, true, swapData);
 
-        // Full withdrawal
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(shares, user1, user1);
+        // Full withdrawal via async flow
+        _requestRedeemAs(user1, shares);
+        _processCurrentRequest("");
+        uint256 assets = _redeemAs(user1, shares);
 
         assertGt(assets, 0, "Should receive assets on full withdrawal");
 
@@ -676,7 +1322,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function testRevert_Rebalance_NotKeeper() public {
         _setupUserDeposit(user1, DEFAULT_DEPOSIT());
 
-        uint256 debtAmount = strategy.computeTargetDebt(DEFAULT_DEPOSIT(), TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(DEFAULT_DEPOSIT(), TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), user1, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -706,7 +1352,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         vm.prank(management);
         strategy.setMaxSlippage(0);
 
-        uint256 debtAmount = strategy.computeTargetDebt(DEFAULT_DEPOSIT(), TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(DEFAULT_DEPOSIT(), TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -758,56 +1404,32 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         vm.prank(management);
         vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.TargetLtvUpdated(TARGET_LTV_BPS, newLtv);
+        emit ILeveragedStrategy.TargetLtvUpdated(newLtv);
         strategy.setTargetLtv(newLtv);
 
-        ILeveragedStrategy.StrategyConfig memory config = strategy.config();
-        assertEq(config.targetLtvBps, newLtv, "Target LTV should be updated");
+        assertEq(strategy.targetLtvBps(), newLtv, "Target LTV should be updated");
     }
 
     function test_SetMaxSlippage_Success() public {
         uint16 newSlippage = 100; // 1%
 
         vm.prank(management);
-        vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.MaxSlippageUpdated(MAX_SLIPPAGE_BPS, newSlippage);
         strategy.setMaxSlippage(newSlippage);
 
-        ILeveragedStrategy.StrategyConfig memory config = strategy.config();
-        assertEq(config.maxSlippageBps, newSlippage, "Max slippage should be updated");
+        assertEq(strategy.maxSlippageBps(), newSlippage, "Max slippage should be updated");
     }
 
-    function test_SetDepositAndWithdrawLimit_Success() public {
-        uint96 newDepositLimit = 5_000_000 * 1e18;
-        uint96 newWithdrawLimit = 1_000_000 * 1e18;
+    function test_SetDepositAndRedeemLimit_Success() public {
+        uint128 newDepositLimit = 5_000_000 * 1e18;
+        uint128 newRedeemLimitShares = 1_000_000 * 1e18;
 
         vm.startPrank(management);
         strategy.setDepositLimit(newDepositLimit);
-        strategy.setWithdrawLimit(newWithdrawLimit);
+        strategy.setRedeemLimitShares(newRedeemLimitShares);
         vm.stopPrank();
 
-        ILeveragedStrategy.StrategyConfig memory config = strategy.config();
-        assertEq(config.depositLimit, newDepositLimit, "Deposit limit should be updated");
-        assertEq(config.withdrawLimit, newWithdrawLimit, "Withdraw limit should be updated");
-    }
-
-    function test_SetStrategyConfig_Success() public {
-        ILeveragedStrategy.StrategyConfig memory newConfig = ILeveragedStrategy.StrategyConfig({
-            targetLtvBps: 6500,
-            maxSlippageBps: 75,
-            reserved: 0,
-            depositLimit: 2_000_000 * 1e18,
-            withdrawLimit: 500_000 * 1e18
-        });
-
-        vm.prank(management);
-        strategy.setStrategyConfig(newConfig);
-
-        ILeveragedStrategy.StrategyConfig memory config = strategy.config();
-        assertEq(config.targetLtvBps, newConfig.targetLtvBps, "Config targetLtvBps mismatch");
-        assertEq(config.maxSlippageBps, newConfig.maxSlippageBps, "Config maxSlippageBps mismatch");
-        assertEq(config.depositLimit, newConfig.depositLimit, "Config depositLimit mismatch");
-        assertEq(config.withdrawLimit, newConfig.withdrawLimit, "Config withdrawLimit mismatch");
+        assertEq(strategy.depositLimit(), newDepositLimit, "Deposit limit should be updated");
+        assertEq(strategy.redeemLimitShares(), newRedeemLimitShares, "redeem limit should be updated");
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -817,27 +1439,29 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_SetOracleAdapter_TwoStepProcess() public {
         address newAdapter = address(0x123);
         address oldAdapter = address(strategy.oracleAdapter());
+        bytes32 oracleKey = strategy.ORACLE_KEY();
 
         // Step 1: Request oracle adapter update
-        vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.OracleUpdateRequested(newAdapter, block.timestamp + strategy.DELAY());
+        vm.expectEmit(true, true, false, true);
+        emit ILeveragedStrategy.UpdateRequested(oracleKey, newAdapter, block.timestamp + strategy.DELAY());
         vm.prank(management);
-        strategy.requestOracleAdapterUpdate(newAdapter);
+        strategy.requestUpdate(oracleKey, newAdapter);
 
         // Verify pending state
-        ILeveragedStrategy.PendingConfig memory pending = strategy.pendingConfig();
-        assertEq(pending.proposedOracleAdapter, newAdapter, "Proposed oracle adapter should be set");
+        (address proposedAddress, uint64 readyTimestamp) = strategy.pendingUpdates(oracleKey);
+        assertEq(proposedAddress, newAdapter, "Proposed oracle adapter should be set");
+        assertEq(readyTimestamp, block.timestamp + strategy.DELAY(), "Ready timestamp should be set");
 
         // Oracle adapter should not be updated yet
         assertEq(address(strategy.oracleAdapter()), oldAdapter, "Oracle adapter should not be updated yet");
 
         // Step 2: Wait for delay period and execute
-        vm.warp(block.timestamp + strategy.DELAY());
+        vm.warp(block.timestamp + strategy.DELAY() + 1);
 
         vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.OracleAdapterSet(oldAdapter, newAdapter);
+        emit ILeveragedStrategy.UpdateExecuted(oracleKey, oldAdapter, newAdapter);
         vm.prank(management);
-        strategy.executeOracleAdapterUpdate();
+        strategy.executeUpdate(oracleKey);
 
         assertEq(address(strategy.oracleAdapter()), newAdapter, "Oracle adapter should be updated");
     }
@@ -845,55 +1469,58 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_SetSwapper_TwoStepProcess() public {
         address newSwapper = address(0x456);
         address oldSwapper = address(strategy.swapper());
+        bytes32 swapperKey = strategy.SWAPPER_KEY();
 
         // Step 1: Request swapper update
-        vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.SwapperUpdateRequested(newSwapper, block.timestamp + strategy.DELAY());
+        vm.expectEmit(true, true, false, true);
+        emit ILeveragedStrategy.UpdateRequested(swapperKey, newSwapper, block.timestamp + strategy.DELAY());
         vm.prank(management);
-        strategy.requestSwapperUpdate(newSwapper);
+        strategy.requestUpdate(swapperKey, newSwapper);
 
         // Swapper should not be updated yet
         assertEq(address(strategy.swapper()), oldSwapper, "Swapper should not be updated yet");
 
         // Step 2: Wait for delay period and execute
-        vm.warp(block.timestamp + strategy.DELAY());
+        vm.warp(block.timestamp + strategy.DELAY() + 1);
 
         vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.SwapperSet(oldSwapper, newSwapper);
+        emit ILeveragedStrategy.UpdateExecuted(swapperKey, oldSwapper, newSwapper);
         vm.prank(management);
-        strategy.executeSwapperUpdate();
+        strategy.executeUpdate(swapperKey);
 
         assertEq(address(strategy.swapper()), newSwapper, "Swapper should be updated");
     }
 
     function test_CancelPendingOracleAdapter_Success() public {
         address newAdapter = address(0x123);
+        bytes32 oracleKey = strategy.ORACLE_KEY();
 
         vm.prank(management);
-        strategy.requestOracleAdapterUpdate(newAdapter);
+        strategy.requestUpdate(oracleKey, newAdapter);
 
         vm.prank(management);
-        vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.PendingRequestCancelled(newAdapter);
-        strategy.cancelPendingOracleAdapter();
+        vm.expectEmit(true, true, false, true);
+        emit ILeveragedStrategy.UpdateCancelled(oracleKey, newAdapter);
+        strategy.cancelUpdate(oracleKey);
 
-        ILeveragedStrategy.PendingConfig memory pending = strategy.pendingConfig();
-        assertEq(pending.proposedOracleAdapter, address(0), "Proposed oracle adapter should be cleared");
+        (address proposedAddress, ) = strategy.pendingUpdates(oracleKey);
+        assertEq(proposedAddress, address(0), "Proposed oracle adapter should be cleared");
     }
 
     function test_CancelPendingSwapper_Success() public {
         address newSwapper = address(0x456);
+        bytes32 swapperKey = strategy.SWAPPER_KEY();
 
         vm.prank(management);
-        strategy.requestSwapperUpdate(newSwapper);
+        strategy.requestUpdate(swapperKey, newSwapper);
 
         vm.prank(management);
-        vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.PendingRequestCancelled(newSwapper);
-        strategy.cancelPendingSwapper();
+        vm.expectEmit(true, true, false, true);
+        emit ILeveragedStrategy.UpdateCancelled(swapperKey, newSwapper);
+        strategy.cancelUpdate(swapperKey);
 
-        ILeveragedStrategy.PendingConfig memory pending = strategy.pendingConfig();
-        assertEq(pending.proposedSwapper, address(0), "Proposed swapper should be cleared");
+        (address proposedAddress, ) = strategy.pendingUpdates(swapperKey);
+        assertEq(proposedAddress, address(0), "Proposed swapper should be cleared");
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -921,85 +1548,85 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function testRevert_SetOracleAdapter_NotManagement() public {
         vm.prank(user1);
         vm.expectRevert();
-        strategy.requestOracleAdapterUpdate(address(0x123));
+        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0x123));
     }
 
     function testRevert_SetSwapper_NotManagement() public {
         vm.prank(user1);
         vm.expectRevert();
-        strategy.requestSwapperUpdate(address(0x123));
+        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0x456));
     }
 
     function testRevert_RequestOracleAdapterUpdate_ZeroAddress() public {
         vm.prank(management);
         vm.expectRevert(LibError.InvalidAddress.selector);
-        strategy.requestOracleAdapterUpdate(address(0));
+        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0));
     }
 
     function testRevert_RequestSwapperUpdate_ZeroAddress() public {
         vm.prank(management);
         vm.expectRevert(LibError.InvalidAddress.selector);
-        strategy.requestSwapperUpdate(address(0));
+        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0));
     }
 
     function testRevert_ExecuteOracleAdapterUpdate_BeforeDelay() public {
         vm.prank(management);
-        strategy.requestOracleAdapterUpdate(address(0x123));
+        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0x123));
 
         vm.prank(management);
         vm.expectRevert(LibError.NotReady.selector);
-        strategy.executeOracleAdapterUpdate();
+        strategy.executeUpdate(strategy.ORACLE_KEY());
     }
 
     function testRevert_ExecuteSwapperUpdate_BeforeDelay() public {
         vm.prank(management);
-        strategy.requestSwapperUpdate(address(0x456));
+        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0x456));
 
         vm.prank(management);
         vm.expectRevert(LibError.NotReady.selector);
-        strategy.executeSwapperUpdate();
+        strategy.executeUpdate(strategy.SWAPPER_KEY());
     }
 
     function testRevert_RequestOracleAdapterUpdate_PendingExists() public {
         vm.prank(management);
-        strategy.requestOracleAdapterUpdate(address(0x123));
+        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0x123));
 
         vm.prank(management);
         vm.expectRevert(LibError.PendingActionExists.selector);
-        strategy.requestOracleAdapterUpdate(address(0x789));
+        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0x789));
     }
 
     function testRevert_RequestSwapperUpdate_PendingExists() public {
         vm.prank(management);
-        strategy.requestSwapperUpdate(address(0x456));
+        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0x456));
 
         vm.prank(management);
         vm.expectRevert(LibError.PendingActionExists.selector);
-        strategy.requestSwapperUpdate(address(0x789));
+        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0x789));
     }
 
     function testRevert_ExecuteOracleAdapterUpdate_NoPending() public {
         vm.prank(management);
         vm.expectRevert(LibError.NoPendingActionExists.selector);
-        strategy.executeOracleAdapterUpdate();
+        strategy.executeUpdate(strategy.ORACLE_KEY());
     }
 
     function testRevert_ExecuteSwapperUpdate_NoPending() public {
         vm.prank(management);
         vm.expectRevert(LibError.NoPendingActionExists.selector);
-        strategy.executeSwapperUpdate();
+        strategy.executeUpdate(strategy.SWAPPER_KEY());
     }
 
     function testRevert_CancelPendingOracleAdapter_NoPending() public {
         vm.prank(management);
         vm.expectRevert(LibError.NoPendingActionExists.selector);
-        strategy.cancelPendingOracleAdapter();
+        strategy.cancelUpdate(strategy.ORACLE_KEY());
     }
 
     function testRevert_CancelPendingSwapper_NoPending() public {
         vm.prank(management);
         vm.expectRevert(LibError.NoPendingActionExists.selector);
-        strategy.cancelPendingSwapper();
+        strategy.cancelUpdate(strategy.SWAPPER_KEY());
     }
 
     function testRevert_RescueTokens_StrategyTokens() public {
@@ -1042,83 +1669,6 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
-    //                         FUNCTION SIGNATURE COLLISION TESTS                                //
-    ///////////////////////////////////////////////////////////////////////////////////////////////
-
-    function test_FunctionCollisions() public {
-        uint256 wad = 1e18;
-        vm.expectRevert("initialized");
-        strategy.initialize(address(assetToken), "name", management, feeReceiver, keeper);
-
-        // Check view functions
-        assertEq(strategy.convertToAssets(wad), wad, "convert to assets");
-        assertEq(strategy.convertToShares(wad), wad, "convert to shares");
-        assertEq(strategy.previewDeposit(wad), wad, "preview deposit");
-        assertEq(strategy.previewMint(wad), wad, "preview mint");
-        assertEq(strategy.previewWithdraw(wad), wad, "preview withdraw");
-        assertEq(strategy.previewRedeem(wad), wad, "preview redeem");
-        assertEq(strategy.totalAssets(), 0, "total assets");
-        assertEq(strategy.totalSupply(), 0, "total supply");
-        assertEq(strategy.unlockedShares(), 0, "unlocked shares");
-        assertEq(strategy.asset(), address(assetToken), "asset");
-        assertEq(strategy.apiVersion(), "3.0.4", "api");
-        assertEq(strategy.MAX_FEE(), 5_000, "max fee");
-        assertEq(strategy.fullProfitUnlockDate(), 0, "unlock date");
-        assertEq(strategy.profitUnlockingRate(), 0, "unlock rate");
-        assertGt(strategy.lastReport(), 0, "last report");
-        assertEq(strategy.pricePerShare(), 10 ** IERC20Metadata(address(assetToken)).decimals(), "pps");
-        assertTrue(!strategy.isShutdown());
-        assertEq(
-            strategy.symbol(),
-            string(abi.encodePacked("ys", IERC20Metadata(address(assetToken)).symbol())),
-            "symbol"
-        );
-        assertEq(strategy.decimals(), IERC20Metadata(address(assetToken)).decimals(), "decimals");
-
-        // Assure modifiers are working
-        vm.startPrank(user1);
-        vm.expectRevert("!management");
-        strategy.setPendingManagement(user1);
-        vm.expectRevert("!pending");
-        strategy.acceptManagement();
-        vm.expectRevert("!management");
-        strategy.setKeeper(user1);
-        vm.expectRevert("!management");
-        strategy.setEmergencyAdmin(user1);
-        vm.expectRevert("!management");
-        strategy.setPerformanceFee(uint16(2_000));
-        vm.expectRevert("!management");
-        strategy.setPerformanceFeeRecipient(user1);
-        vm.expectRevert("!management");
-        strategy.setProfitMaxUnlockTime(1);
-        vm.stopPrank();
-
-        // Assure checks are being used
-        vm.startPrank(strategy.management());
-        vm.expectRevert("Cannot be self");
-        strategy.setPerformanceFeeRecipient(address(strategy));
-        vm.expectRevert("too long");
-        strategy.setProfitMaxUnlockTime(type(uint256).max);
-        vm.stopPrank();
-
-        // Mint some shares to the user for transfer tests
-        _setupUserDeposit(user1, wad);
-        assertEq(strategy.balanceOf(address(user1)), wad, "balance");
-        vm.prank(user1);
-        strategy.transfer(keeper, wad);
-        assertEq(strategy.balanceOf(user1), 0, "second balance");
-        assertEq(strategy.balanceOf(keeper), wad, "keeper balance");
-        assertEq(strategy.allowance(keeper, user1), 0, "allowance");
-        vm.prank(keeper);
-        assertTrue(strategy.approve(user1, wad), "approval");
-        assertEq(strategy.allowance(keeper, user1), wad, "second allowance");
-        vm.prank(user1);
-        assertTrue(strategy.transferFrom(keeper, user1, wad), "transfer from");
-        assertEq(strategy.balanceOf(user1), wad, "second balance");
-        assertEq(strategy.balanceOf(keeper), 0, "keeper balance");
-    }
-
-    ///////////////////////////////////////////////////////////////////////////////////////////////
     //                              OPERATION TESTS                                              //
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1135,19 +1685,18 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         // Report profit
         vm.prank(keeper);
-        (uint256 profit, uint256 loss) = strategy.report();
+        (uint256 profit, uint256 loss) = strategy.harvestAndReport();
 
         // Check return Values
         assertGe(profit, 0, "!profit");
         assertEq(loss, 0, "!loss");
 
-        skip(strategy.profitMaxUnlockTime());
-
         uint256 balanceBefore = assetToken.balanceOf(user1);
 
-        // Withdraw all funds
-        vm.prank(user1);
-        strategy.redeem(_amount, user1, user1);
+        // Withdraw all funds using async flow
+        _requestRedeemAs(user1, _amount);
+        _processCurrentRequest("");
+        _redeemAs(user1, _amount);
 
         assertGe(assetToken.balanceOf(user1), balanceBefore + _amount, "!final balance");
     }
@@ -1170,19 +1719,18 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         // Report profit
         vm.prank(keeper);
-        (uint256 profit, uint256 loss) = strategy.report();
+        (uint256 profit, uint256 loss) = strategy.harvestAndReport();
 
         // Check return Values
         assertGe(profit, toAirdrop, "!profit");
         assertEq(loss, 0, "!loss");
 
-        skip(strategy.profitMaxUnlockTime());
-
         uint256 balanceBefore = assetToken.balanceOf(user1);
 
-        // Withdraw all funds
-        vm.prank(user1);
-        strategy.redeem(_amount, user1, user1);
+        // Withdraw all funds using async flow
+        _requestRedeemAs(user1, _amount);
+        _processCurrentRequest("");
+        _redeemAs(user1, _amount);
 
         assertGe(assetToken.balanceOf(user1), balanceBefore + _amount, "!final balance");
     }
@@ -1210,13 +1758,11 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         // Report profit
         vm.prank(keeper);
-        (uint256 profit, uint256 loss) = strategy.report();
+        (uint256 profit, uint256 loss) = strategy.harvestAndReport();
 
         // Check return Values
         assertGe(profit, toAirdrop, "!profit");
         assertEq(loss, 0, "!loss");
-
-        skip(strategy.profitMaxUnlockTime());
 
         // Get the expected fee
         uint256 expectedShares = (profit * 1_000) / BPS_PRECISION;
@@ -1225,26 +1771,22 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         uint256 balanceBefore = assetToken.balanceOf(user1);
 
-        // Withdraw all funds
-        vm.prank(user1);
-        strategy.redeem(_amount, user1, user1);
+        // Withdraw all funds using async flow
+        _requestRedeemAs(user1, _amount);
+        _processCurrentRequest("");
+        _redeemAs(user1, _amount);
 
         assertGe(assetToken.balanceOf(user1), balanceBefore + _amount, "!final balance");
 
-        vm.prank(feeReceiver);
-        strategy.redeem(expectedShares, feeReceiver, feeReceiver);
+        // Withdraw fee receiver shares using async flow
+        _requestRedeemAs(feeReceiver, expectedShares);
+        _processCurrentRequest("");
+        _redeemAs(feeReceiver, expectedShares);
 
         assertEq(strategy.totalAssets(), 0, "!strategy total assets");
         assertEq(strategy.totalSupply(), 0, "!strategy total supply");
 
         assertGe(assetToken.balanceOf(feeReceiver), expectedShares, "!perf fee out");
-    }
-
-    function test_TendTrigger() public {
-        // Tend trigger is false by default if not implemented
-        (bool trigger, ) = strategy.tendTrigger();
-
-        assertFalse(trigger);
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -1258,7 +1800,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 shares = _setupUserDeposit(user1, depositAmount);
 
         // 2. Leverage up
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -1272,16 +1814,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         strategy.rebalance(debtAmount, true, swapData);
 
         // 3. Price increases (bull market)
-        _simulatePriceChange(15);
+        _simulateCollateralPriceChange(1500);
 
         // 4. Report profits
         vm.prank(keeper);
-        strategy.report();
-        skip(strategy.profitMaxUnlockTime());
+        strategy.harvestAndReport();
 
-        // 5. Withdraw with profit
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(shares, user1, user1);
+        // 5. Withdraw with profit via async flow
+        _requestRedeemAs(user1, shares);
+        _processCurrentRequest("");
+        uint256 assets = _redeemAs(user1, shares);
 
         assertGt(assets, depositAmount, "Should profit from leveraged position");
     }
@@ -1292,7 +1834,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 shares1 = _setupUserDeposit(user1, deposit1);
 
         // Setup leverage
-        uint256 debtAmount = strategy.computeTargetDebt(deposit1, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(deposit1, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -1306,7 +1848,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         strategy.rebalance(debtAmount, true, swapData);
 
         // Price increases 10%
-        _simulatePriceChange(10);
+        _simulateCollateralPriceChange(1000);
 
         // User2 enters at higher price
         uint256 deposit2 = DEFAULT_DEPOSIT();
@@ -1314,7 +1856,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         // Rebalance for new deposits
         (uint256 netAssets, , uint256 currentDebt) = strategy.getNetAssets();
-        uint256 newTargetDebt = strategy.computeTargetDebt(netAssets, TARGET_LTV_BPS);
+        uint256 newTargetDebt = LeverageLib.computeTargetDebt(netAssets, TARGET_LTV_BPS, strategy.oracleAdapter());
         if (newTargetDebt > currentDebt) {
             uint256 additionalDebt = newTargetDebt - currentDebt;
             _mintAndApprove(address(debtToken), keeper, address(strategy), additionalDebt);
@@ -1331,12 +1873,10 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         }
 
         vm.prank(keeper);
-        strategy.report();
-        skip(strategy.profitMaxUnlockTime());
+        strategy.harvestAndReport();
 
         // User1 should have more value per share (entered at lower price)
-        uint256 pps = strategy.pricePerShare();
-        uint256 user1Value = (shares1 * pps) / 1e18;
+        uint256 user1Value = strategy.convertToAssets(shares1);
 
         assertGt(user1Value, deposit1, "User1 should have gains (early entry)");
     }
@@ -1347,14 +1887,14 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 initialLtv = strategy.getStrategyLtv();
 
         // Price drops, LTV increases
-        _simulatePriceChange(-10);
+        _simulateCollateralPriceChange(-1000);
 
         uint256 ltvAfterDrop = strategy.getStrategyLtv();
         assertGt(ltvAfterDrop, initialLtv, "LTV should increase after price drop");
 
         // Deleverage to bring LTV back to target
         (uint256 netAssets, , uint256 currentDebt) = strategy.getNetAssets();
-        uint256 targetDebt = strategy.computeTargetDebt(netAssets, TARGET_LTV_BPS);
+        uint256 targetDebt = LeverageLib.computeTargetDebt(netAssets, TARGET_LTV_BPS, strategy.oracleAdapter());
 
         uint256 deleverageAmount = currentDebt - targetDebt;
 
@@ -1384,7 +1924,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
 
         // Simulate 10% APY on collateral, 5% APY on debt over 1 year
-        _simulateInterestAccrual(1000, 500, 365 days);
+        _simulateCollateralPriceChange(500); // 5% net
 
         (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
 
@@ -1396,19 +1936,16 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
         (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
-        uint256 ppsBeforeReport = strategy.pricePerShare();
+        uint256 ppsBeforeReport = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
 
         // Simulate high collateral yield (15% APY) vs low debt interest (3% APY)
-        _simulateInterestAccrual(1500, 300, 180 days);
+        _simulateCollateralPriceChange(1200); // net 12%
 
         // Trigger report to realize profits
         vm.prank(keeper);
-        strategy.report();
+        strategy.harvestAndReport();
 
-        // Wait for profit to unlock
-        skip(strategy.profitMaxUnlockTime());
-
-        uint256 ppsAfterReport = strategy.pricePerShare();
+        uint256 ppsAfterReport = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
         (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
 
         assertGt(netAssetsAfter, netAssetsBefore, "Net assets should increase");
@@ -1421,34 +1958,27 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         uint256 totalAssetsBefore = strategy.totalAssets();
 
-        // Simulate profit
-        _simulateInterestAccrual(1000, 200, 90 days);
+        _simulateCollateralPriceChange(1000); //10%
 
         vm.prank(keeper);
-        strategy.report();
+        strategy.harvestAndReport();
 
         uint256 totalAssetsAfter = strategy.totalAssets();
 
         assertGt(totalAssetsAfter, totalAssetsBefore, "Total assets should increase after report");
     }
 
-    /// @notice Test share price increases after profit
     function test_Profit_SharePriceIncreases() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        uint256 ppsBefore = strategy.pricePerShare();
+        uint256 ppsBefore = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
 
-        // Simulate significant profit
-        _simulateInterestAccrual(2000, 300, 365 days);
+        _simulateCollateralPriceChange(2000); //20%
 
         vm.prank(keeper);
-        strategy.report();
+        strategy.harvestAndReport();
 
-        // Wait for profit to unlock
-        skip(strategy.profitMaxUnlockTime());
-
-        uint256 ppsAfter = strategy.pricePerShare();
-
+        uint256 ppsAfter = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
         assertGt(ppsAfter, ppsBefore, "Share price should increase");
     }
 
@@ -1458,7 +1988,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 shares = _setupUserDeposit(user1, depositAmount);
 
         // Setup leverage
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -1471,21 +2001,18 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         vm.prank(keeper);
         strategy.rebalance(debtAmount, true, swapData);
 
-        // Simulate profit
-        _simulateInterestAccrual(1500, 300, 180 days);
+        _simulateCollateralPriceChange(1500); // 15%
 
         vm.prank(keeper);
-        (uint256 profit, uint256 loss) = strategy.report();
+        (uint256 profit, uint256 loss) = strategy.harvestAndReport();
 
         assertEq(loss, 0, "loss should be 0");
         assertGt(profit, 0, "!profit");
 
-        // Wait for profit unlock
-        skip(strategy.profitMaxUnlockTime());
-
-        // Withdraw all
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(shares, user1, user1);
+        // Withdraw all via async flow
+        _requestRedeemAs(user1, shares);
+        _processCurrentRequest("");
+        uint256 assets = _redeemAs(user1, shares);
 
         assertGt(assets, depositAmount, "User should receive more than deposited");
     }
@@ -1500,8 +2027,9 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
 
-        // Simulate low collateral yield (2% APY) vs high debt interest (10% APY)
-        _simulateInterestAccrual(200, 1000, 365 days);
+        // Simulate low collateral yield (2% APY) and high debt interest (10% APY)
+        // by reducing the price of collateral
+        _simulateCollateralPriceChange(-800);
 
         (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
 
@@ -1512,15 +2040,14 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_Loss_SharePriceDecreases() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        uint256 ppsBefore = strategy.pricePerShare();
+        uint256 ppsBefore = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
 
-        // Simulate loss (debt interest > yield)
-        _simulateInterestAccrual(100, 1500, 365 days);
+        _simulateCollateralPriceChange(-200); // 2%
 
         vm.prank(keeper);
-        strategy.report();
+        strategy.harvestAndReport();
 
-        uint256 ppsAfter = strategy.pricePerShare();
+        uint256 ppsAfter = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
 
         assertLt(ppsAfter, ppsBefore, "Share price should decrease after loss");
     }
@@ -1531,7 +2058,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 shares = _setupUserDeposit(user1, depositAmount);
 
         // Setup leverage
-        uint256 debtAmount = strategy.computeTargetDebt(depositAmount, TARGET_LTV_BPS);
+        uint256 debtAmount = LeverageLib.computeTargetDebt(depositAmount, TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -1545,14 +2072,15 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         strategy.rebalance(debtAmount, true, swapData);
 
         // Simulate loss
-        _simulateInterestAccrual(100, 1200, 180 days);
+        _simulateCollateralPriceChange(-10_00);
 
         vm.prank(keeper);
-        strategy.report();
+        strategy.harvestAndReport();
 
         // Withdraw all
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(shares, user1, user1);
+        _requestRedeemAs(user1, shares);
+        _processCurrentRequest("");
+        uint256 assets = _redeemAs(user1, shares);
 
         assertLt(assets, depositAmount, "User should receive less than deposited after loss");
     }
@@ -1562,8 +2090,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
         (uint256 netAssetsBefore, uint256 totalCollateralBefore, uint256 totalDebtBefore) = strategy.getNetAssets();
 
-        // Simulate moderate loss
-        _simulateInterestAccrual(100, 800, 180 days);
+        _simulateCollateralPriceChange(-500); // -5%
 
         (uint256 netAssetsAfter, uint256 totalCollateralAfter, uint256 totalDebtAfter) = strategy.getNetAssets();
 
@@ -1608,7 +2135,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 shares = strategy.deposit(DEPOSIT_LIMIT, user1);
 
         assertGt(shares, 0, "Should accept deposit at limit");
-        assertEq(strategy.availableDepositLimit(user1), 0, "No more deposits should be available");
+        assertEq(strategy.maxDeposit(user1), 0, "No more deposits should be available");
     }
 
     /// @notice Test withdraw more than balance
@@ -1627,7 +2154,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         _setupUserDeposit(user1, depositAmount);
 
         // First leverage up to 50% LTV
-        uint256 debtAmount1 = strategy.computeTargetDebt(depositAmount, 5000);
+        uint256 debtAmount1 = LeverageLib.computeTargetDebt(depositAmount, 5000, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount1);
 
         bytes memory swapData = _getKyberswapSwapData(
@@ -1643,7 +2170,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         (uint256 netAssets1, , ) = strategy.getNetAssets();
 
         // Second leverage up to higher LTV
-        uint256 additionalDebt = strategy.computeTargetDebt(netAssets1, TARGET_LTV_BPS);
+        uint256 additionalDebt = LeverageLib.computeTargetDebt(netAssets1, TARGET_LTV_BPS, strategy.oracleAdapter());
         (, , uint256 currentDebt) = strategy.getNetAssets();
         uint256 debtAmount2 = additionalDebt > currentDebt ? additionalDebt - currentDebt : 0;
 
@@ -1664,23 +2191,5 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         uint256 finalLtv = strategy.getStrategyLtv();
         assertGt(finalLtv, 5000, "LTV should increase after second rebalance");
         assertApproxEqRel(finalLtv, TARGET_LTV_BPS, 1e15, "LTV should be near target");
-    }
-
-    /// @notice Test emergency shutdown scenario
-    function test_Shutdown_EmergencyWithdraw() public {
-        _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
-
-        // Shutdown strategy
-        vm.prank(management);
-        strategy.shutdownStrategy();
-
-        assertTrue(strategy.isShutdown(), "Strategy should be shutdown");
-
-        // User should still be able to withdraw
-        uint256 shares = strategy.balanceOf(user1);
-        vm.prank(user1);
-        uint256 assets = strategy.redeem(shares, user1, user1);
-
-        assertGt(assets, 0, "User should receive assets after shutdown");
     }
 }

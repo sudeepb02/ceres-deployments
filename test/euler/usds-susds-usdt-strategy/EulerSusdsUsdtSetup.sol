@@ -16,6 +16,10 @@ import {ILeveragedStrategy} from "ceres-strategies/src/interfaces/strategies/ILe
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {EulerAdapterTypeOne as EulerOracleAdapter} from "ceres-strategies/src/periphery/EulerAdapterTypeOne.sol";
 import {CeresSwapper} from "ceres-strategies/src/periphery/CeresSwapper.sol";
+import {RoleManager} from "ceres-strategies/src/periphery/RoleManager.sol";
+import {FlashLoanRouter} from "ceres-strategies/src/periphery/FlashLoanRouter.sol";
+
+import {MockPriceOracle} from "test/common/MockPriceOracle.sol";
 
 /// @title EulerSusdsUsdtSetup
 /// @notice Euler-specific test setup inheriting from LeveragedStrategyBaseSetup
@@ -56,6 +60,13 @@ contract EulerSusdsUsdtSetup is LeveragedStrategyBaseSetup {
 
     uint256 constant ORACLE_PRECISION = 1e18;
 
+    address public constant KYBER_SCALE_HELPER = KYBER_SCALE_HELPER_ARBITRUM;
+    address public constant KYBERSWAP_ROUTER = KYBERSWAP_ROUTER_ARBITRUM;
+    address public constant AUGUSTUS_REGISTRY = AUGUSTUS_REGISTRY_ARBITRUM;
+    address public constant AUGUSTUS_SWAPPER = AUGUSTUS_SWAPPER_ARBITRUM;
+
+    address public constant EULER_FLASH_LOAN_PROVIDER = address(0); // TODO: Populate this address
+
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   EULER-SPECIFIC CONTRACTS                               //
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -68,6 +79,10 @@ contract EulerSusdsUsdtSetup is LeveragedStrategyBaseSetup {
     // IEulerOracle public eulerOracle = IEulerOracle(EULER_ORACLE_ROUTER); // Euler oracle router address
 
     EulerOracleAdapter public eulerOracleAdapter;
+
+    MockPriceOracle public mockCollateralToAssetOracle;
+    MockPriceOracle public mockAssetToUsdOracle;
+    MockPriceOracle public mockDebtToUsdOracle;
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   SETUP OVERRIDE                                         //
@@ -123,10 +138,67 @@ contract EulerSusdsUsdtSetup is LeveragedStrategyBaseSetup {
 
         // Set base contract reference
         oracleAdapter = IOracleAdapter(address(eulerOracleAdapter));
+
+        console.log("Euler Oracle Adapter deployed at:", address(eulerOracleAdapter));
+
+        // Setup mock oracle contracts for testing price changes
+        console.log("Setting up mock oracles for testing...");
+
+        {
+            // Mock collateral to asset oracle
+            mockCollateralToAssetOracle = new MockPriceOracle(
+                eulerOracleAdapter.getCollateralPriceInAssetToken(),
+                0,
+                COLLATERAL_TOKEN,
+                ASSET_TOKEN
+            );
+        }
+
+        {
+            // Mock asset to USD oracle
+            mockAssetToUsdOracle = new MockPriceOracle(
+                eulerOracleAdapter.getAssetPriceInUsd(),
+                0,
+                ASSET_TOKEN,
+                USD_TOKEN
+            );
+        }
+
+        {
+            // Mock debt to USD oracle
+            mockDebtToUsdOracle = new MockPriceOracle(eulerOracleAdapter.getDebtPriceInUsd(), 0, DEBT_TOKEN, USD_TOKEN);
+        }
     }
 
     function _setupSwapper() internal override {
         swapper = new CeresSwapper(CERES_DEPLOYER, KYBER_SCALE_HELPER, AUGUSTUS_REGISTRY);
+
+        CeresSwapper.SwapProvider memory kyberswapProvider = CeresSwapper.SwapProvider({
+            swapType: CeresSwapper.SwapType.KYBERSWAP_AGGREGATOR,
+            router: KYBERSWAP_ROUTER
+        });
+
+        CeresSwapper.SwapProvider memory paraswapProvider = CeresSwapper.SwapProvider({
+            swapType: CeresSwapper.SwapType.PARASWAP_AGGREGATOR,
+            router: AUGUSTUS_SWAPPER
+        });
+
+        vm.startPrank(management);
+        swapper.setSwapProvider(address(collateralToken), address(debtToken), paraswapProvider);
+        swapper.setSwapProvider(address(debtToken), address(collateralToken), kyberswapProvider);
+
+        swapper.setSwapProvider(address(assetToken), address(collateralToken), kyberswapProvider);
+        swapper.setSwapProvider(address(collateralToken), address(assetToken), kyberswapProvider);
+        vm.stopPrank();
+    }
+
+    function _deployRoleManager() internal override {
+        roleManager = new RoleManager(2 days, management);
+
+        vm.startPrank(management);
+        roleManager.grantRole(MANAGEMENT_ROLE, management);
+        roleManager.grantRole(KEEPER_ROLE, keeper);
+        vm.stopPrank();
     }
 
     function _deployStrategy() internal override {
@@ -136,36 +208,52 @@ contract EulerSusdsUsdtSetup is LeveragedStrategyBaseSetup {
             new LeveragedEuler(
                 ASSET_TOKEN, // asset token
                 "Ceres Leveraged Euler Strategy", // name
-                COLLATERAL_TOKEN, // collateral token (same as asset)
+                "ceres-USDS-USDT", // symbol
+                COLLATERAL_TOKEN, // collateral token
                 DEBT_TOKEN, // debt token
                 COLLATERAL_VAULT, // collateral vault
                 DEBT_VAULT, // borrow vault
                 address(evc), // vault connector
-                address(swapper), // ceres swapper
-                address(eulerOracleAdapter) // oracle adapter
+                address(roleManager) // role manager
             )
         );
         console.log("Strategy deployed at:", deployedStrategy);
         strategy = ILeveragedStrategy(deployedStrategy);
 
         strategy.setPerformanceFeeRecipient(feeReceiver);
-        strategy.setKeeper(keeper);
-        strategy.setEmergencyAdmin(management);
 
         vm.stopPrank();
+    }
+
+    function _deployFlashLoanRouter() internal override {
+        vm.startPrank(management);
+        flashLoanRouter = new FlashLoanRouter(address(roleManager));
+        vm.stopPrank();
+    }
+
+    function _configureFlashLoanRouter() internal override {
+        vm.prank(management);
+        flashLoanRouter.setFlashConfig(
+            address(strategy),
+            FlashLoanRouter.FlashSource.EULER,
+            address(borrowVault),
+            true
+        );
     }
 
     function _initializeStrategy() internal override {
         vm.startPrank(management);
 
+        // Set periphery contracts
+        strategy.requestUpdate(strategy.ORACLE_KEY(), address(eulerOracleAdapter));
+        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(swapper));
+        strategy.requestUpdate(strategy.FLASH_LOAN_ROUTER_KEY(), address(flashLoanRouter));
+
         // Set LTV parameters
         strategy.setTargetLtv(TARGET_LTV_BPS);
         strategy.setMaxSlippage(MAX_SLIPPAGE_BPS);
         strategy.setDepositLimit(DEPOSIT_LIMIT);
-        strategy.setWithdrawLimit(WITHDRAW_LIMIT);
-
-        // Add keeper role
-        strategy.setKeeper(keeper);
+        strategy.setRedeemLimitShares(REDEEM_LIMIT_SHARES);
 
         vm.stopPrank();
     }
@@ -183,15 +271,9 @@ contract EulerSusdsUsdtSetup is LeveragedStrategyBaseSetup {
         // vm.stopPrank();
     }
 
-    function _simulateInterestAccrual(
-        uint256 interestRateBpsCollateral,
-        uint256 interestRateBpsDebt,
-        uint256 timeElapsed
-    ) internal override {
-        skip(timeElapsed);
+    function _simulateCollateralPriceChange(int256 percentChange) internal override {
+        // @todo
     }
-
-    function _simulatePriceChange(int256 percentChange) internal override {}
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                    LABEL ADDRESSES                                        //

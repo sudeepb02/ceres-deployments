@@ -21,47 +21,49 @@ import {FlashLoanRouter} from "ceres-strategies/src/periphery/FlashLoanRouter.so
 
 import {MockPriceOracle} from "test/common/MockPriceOracle.sol";
 
-/// @title AvusdSavusdUsdcSetup
+/// @title UsdfSusdfUsdcSetup
 /// @notice Euler-specific test setup inheriting from LeveragedStrategyBaseSetup
-contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
+contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   STRATEGY-SPECIFIC CONSTANTS                               //
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // Tokens
-    address public constant AVUSD_TOKEN = 0x24dE8771bC5DdB3362Db529Fc3358F2df3A0E346;
-    address public constant SAVUSD_TOKEN = 0x06d47F3fb376649c3A9Dafe069B3D6E35572219E;
-    address public constant USDC_TOKEN = 0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E;
+    address public constant USDF_TOKEN = 0xFa2B947eEc368f42195f24F36d2aF29f7c24CeC2;
+    address public constant SUSDF_TOKEN = 0xc8CF6D7991f15525488b2A83Df53468D682Ba4B0;
+    address public constant USDC_TOKEN = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address public constant USD_TOKEN = 0x0000000000000000000000000000000000000348; // synthetic USD representation
 
     // Euler contracts
-    address public constant EVC = 0xddcbe30A761Edd2e19bba930A977475265F36Fa1;
-    address public constant COLLATERAL_VAULT = 0xbaC3983342b805E66F8756E265b3B0DdF4B685Fc; // Collateral vault
-    address public constant DEBT_VAULT = 0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e; // Debt vault
+    address public constant EVC = 0x0C9a3dd6b8F28529d72d7f9cE918D493519EE383;
+    address public constant COLLATERAL_VAULT = 0x2F849ba554C1ea2eDe9C240Bbe9d247dd6eC8A6B;
+    address public constant DEBT_VAULT = 0x3573A84Bee11D49A1CbCe2b291538dE7a7dD81c6;
 
-    address public constant ASSET_TO_COLLATERAL_ORACLE = 0x3d14C2c22fFfB6fD00759451A7656A052B705B98;
-    address public constant ASSET_TO_USD_ORACLE = 0xB92B9341be191895e8C68b170aC4528839fFe0b2;
-    address public constant DEBT_TO_USD_ORACLE = 0x997d72fb46690f304C7DB92df9AA823323fb23B2;
+    address public constant ASSET_TO_COLLATERAL_ORACLE = 0x1ada463F00833545b33A1B6551d0954Ba32be1fc;
+    address public constant ASSET_TO_USD_ORACLE = 0xEd8e9151602E40233D358d6C323d9F9717a1bec4;
+    address public constant DEBT_TO_USD_ORACLE = 0xD35657aE033A86FFa8fc6Bc767C5eb57C7c3D4B8;
 
-    address public constant KYBER_SCALE_HELPER = KYBER_SCALE_HELPER_AVAX;
-    address public constant KYBERSWAP_ROUTER = KYBERSWAP_ROUTER_AVAX;
-    address public constant AUGUSTUS_REGISTRY = AUGUSTUS_REGISTRY_AVAX;
-    address public constant AUGUSTUS_SWAPPER = AUGUSTUS_SWAPPER_AVAX;
+    address public constant KYBER_SCALE_HELPER = KYBER_SCALE_HELPER_ETHEREUM;
+    address public constant KYBERSWAP_ROUTER = KYBERSWAP_ROUTER_ETHEREUM;
+    address public constant AUGUSTUS_REGISTRY = AUGUSTUS_REGISTRY_ETHEREUM;
+    address public constant AUGUSTUS_SWAPPER = AUGUSTUS_SWAPPER_ETHEREUM;
 
-    address public constant EULER_FLASH_LOAN_PROVIDER = address(0); // TODO: Populate this address
+    // address public constant EULER_FLASH_LOAN_PROVIDER = 0x3573A84Bee11D49A1CbCe2b291538dE7a7dD81c6; // Euler Debt vault
+    FlashLoanRouter.FlashSource public FLASH_LOAN_SOURCE = FlashLoanRouter.FlashSource.ERC3156;
+    address public constant FLASH_LOAN_PROVIDER = SILO_USDC_FLASH_LOAN_PROVIDER;
 
     // Token decimals
-    uint8 public constant AVUSD_TOKEN_DECIMALS = 18;
-    uint8 public constant SAVUSD_TOKEN_DECIMALS = 18;
+    uint8 public constant USDF_TOKEN_DECIMALS = 18;
+    uint8 public constant SUSDF_TOKEN_DECIMALS = 18;
     uint8 public constant USDC_TOKEN_DECIMALS = 6;
 
     // Final strategy constants used throughout the tests
-    address public constant ASSET_TOKEN = AVUSD_TOKEN;
-    address public constant COLLATERAL_TOKEN = SAVUSD_TOKEN;
+    address public constant ASSET_TOKEN = USDF_TOKEN;
+    address public constant COLLATERAL_TOKEN = SUSDF_TOKEN;
     address public constant DEBT_TOKEN = USDC_TOKEN;
 
-    uint8 public constant ASSET_DECIMALS = AVUSD_TOKEN_DECIMALS;
-    uint8 public constant COLLATERAL_TOKEN_DECIMALS = SAVUSD_TOKEN_DECIMALS;
+    uint8 public constant ASSET_DECIMALS = USDF_TOKEN_DECIMALS;
+    uint8 public constant COLLATERAL_TOKEN_DECIMALS = SUSDF_TOKEN_DECIMALS;
     uint8 public constant DEBT_TOKEN_DECIMALS = USDC_TOKEN_DECIMALS;
 
     uint256 constant ORACLE_PRECISION = 1e18;
@@ -89,10 +91,10 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
 
     /// @notice Setup function - calls parent setUp which invokes all abstract implementations
     function setUp() public virtual override {
-        string memory chainUrl = vm.envString("RPC_CHAINID_43114");
+        string memory chainUrl = vm.envString("RPC_CHAINID_1");
         if (bytes(chainUrl).length == 0) {
-            revert("RPC_CHAINID_43114 env var not set");
-            chainUrl = "https://1rpc.io/avax/c";
+            revert("RPC_CHAINID_1 env var not set");
+            chainUrl = "https://rpc.flashbots.net";
         }
 
         vm.createSelectFork(chainUrl);
@@ -177,13 +179,13 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
             router: KYBERSWAP_ROUTER
         });
 
-        CeresSwapper.SwapProvider memory paraswapProvider = CeresSwapper.SwapProvider({
-            swapType: CeresSwapper.SwapType.PARASWAP_AGGREGATOR,
-            router: AUGUSTUS_SWAPPER
-        });
+        // CeresSwapper.SwapProvider memory paraswapProvider = CeresSwapper.SwapProvider({
+        //     swapType: CeresSwapper.SwapType.PARASWAP_AGGREGATOR,
+        //     router: AUGUSTUS_SWAPPER
+        // });
 
         vm.startPrank(management);
-        swapper.setSwapProvider(address(collateralToken), address(debtToken), paraswapProvider);
+        swapper.setSwapProvider(address(collateralToken), address(debtToken), kyberswapProvider);
         swapper.setSwapProvider(address(debtToken), address(collateralToken), kyberswapProvider);
 
         swapper.setSwapProvider(address(assetToken), address(collateralToken), kyberswapProvider);
@@ -208,7 +210,7 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
             new LeveragedEuler(
                 ASSET_TOKEN, // asset token
                 "Ceres Leveraged Euler Strategy", // name
-                "ceres-avUSD-USDC", // symbol
+                "ceres-USDf-sUSDf-USDC", // symbol
                 COLLATERAL_TOKEN, // collateral token
                 DEBT_TOKEN, // debt token
                 COLLATERAL_VAULT, // collateral vault
@@ -233,12 +235,7 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
 
     function _configureFlashLoanRouter() internal override {
         vm.prank(management);
-        flashLoanRouter.setFlashConfig(
-            address(strategy),
-            FlashLoanRouter.FlashSource.EULER,
-            address(borrowVault),
-            true
-        );
+        flashLoanRouter.setFlashConfig(address(strategy), FLASH_LOAN_SOURCE, FLASH_LOAN_PROVIDER, true);
     }
 
     function _initializeStrategy() internal override {
@@ -250,6 +247,7 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
         strategy.requestUpdate(strategy.FLASH_LOAN_ROUTER_KEY(), address(flashLoanRouter));
 
         // Set LTV parameters
+        strategy.setMaxLoss(5_00);
         strategy.setTargetLtv(TARGET_LTV_BPS);
         strategy.setMaxSlippage(MAX_SLIPPAGE_BPS);
         strategy.setDepositLimit(DEPOSIT_LIMIT);
