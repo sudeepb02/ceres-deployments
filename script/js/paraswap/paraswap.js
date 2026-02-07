@@ -4,6 +4,7 @@ import { constructSimpleSDK, SwapSide } from "@paraswap/sdk";
 import { writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { writeSwapOutputFiles } from "../common/fileUtils.js";
 
 const DEFAULT_SLIPPAGE_BPS = 50; // 0.5%
 
@@ -28,13 +29,7 @@ function buildSdk(chainId) {
 }
 
 function writeOutputs(detailed, rawData) {
-  const detailedPath = path.join(__dirname, "swapOutputDetailed.txt");
-  const rawPath = path.join(__dirname, "swapOutputRaw.txt");
-
-  writeFileSync(detailedPath, `${JSON.stringify(detailed, null, 2)}\n`);
-  writeFileSync(rawPath, `${rawData}\n`);
-
-  return { detailedPath, rawPath };
+  return writeSwapOutputFiles(__dirname, detailed, rawData);
 }
 
 function isRateLimit(err) {
@@ -103,7 +98,9 @@ export async function getParaswapSwapData(params) {
     buildInput.destAmount = amount;
   }
 
-  writeFileSync("debug_buildInput.json", JSON.stringify(buildInput, null, 2));
+  // Write debug build input to paraswap directory
+  const debugPath = path.join(__dirname, "debug_buildInput.json");
+  writeFileSync(debugPath, JSON.stringify(buildInput, null, 2));
 
   let txParams;
   try {
@@ -119,22 +116,22 @@ export async function getParaswapSwapData(params) {
     throw new Error("Paraswap buildTx returned empty data");
   }
 
+  // Dump full API responses for debugging
   const detailed = {
-    chainId,
-    swapType,
-    side: side === SwapSide.SELL ? "SELL" : "BUY",
-    fromToken,
-    toToken,
-    amount,
-    srcDecimals,
-    destDecimals,
-    slippageBps,
-    augustus: txParams.to,
-    value: txParams.value ?? "0",
-    gas: txParams.gas,
-    maxFeePerGas: txParams.maxFeePerGas,
-    maxPriorityFeePerGas: txParams.maxPriorityFeePerGas,
-    data: txParams.data,
+    inputParams: {
+      chainId,
+      swapType,
+      side: side === SwapSide.SELL ? "SELL" : "BUY",
+      fromToken,
+      toToken,
+      amount,
+      fromTokenDecimals,
+      toTokenDecimals,
+      swapper,
+      slippageBps,
+    },
+    priceRouteResponse: priceRoute,
+    buildTxResponse: txParams,
   };
 
   return { detailed, raw: txParams.data };

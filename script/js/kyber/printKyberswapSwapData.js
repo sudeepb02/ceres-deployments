@@ -1,4 +1,10 @@
 import { getKyberSwapData } from "./kyberApiHelper.js";
+import { writeSwapOutputFiles } from "../common/fileUtils.js";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -18,7 +24,7 @@ async function main() {
   }
 
   try {
-    const { raw } = await getKyberSwapData({
+    const { detailed, raw } = await getKyberSwapData({
       chainId,
       fromToken,
       toToken,
@@ -26,6 +32,10 @@ async function main() {
       swapper,
       swapType,
     });
+    
+    // Write debug output files
+    writeSwapOutputFiles(__dirname, detailed, raw);
+    
     console.log(raw);
   } catch (err) {
     console.error("Error fetching swap data:", err.message ?? err);

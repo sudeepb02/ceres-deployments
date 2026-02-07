@@ -1,4 +1,10 @@
 import { getParaswapSwapData } from "./paraswap.js";
+import { writeSwapOutputFiles } from "../common/fileUtils.js";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function main() {
   const args = process.argv.slice(2);
@@ -20,7 +26,7 @@ async function main() {
   const swapType = swapTypeArg ?? "exactIn"; // use "exactOut" to build BUY
 
   try {
-    const { raw } = await getParaswapSwapData({
+    const { detailed, raw } = await getParaswapSwapData({
       chainId,
       fromToken,
       toToken,
@@ -30,6 +36,9 @@ async function main() {
       fromTokenDecimals,
       toTokenDecimals,
     });
+
+    // Write debug output files
+    writeSwapOutputFiles(__dirname, detailed, raw);
 
     // Print raw data for Foundry ffi consumption
     console.log(raw);

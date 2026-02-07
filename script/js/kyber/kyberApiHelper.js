@@ -1,7 +1,7 @@
 import axios from "axios";
-import { writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { writeSwapOutputFiles } from "../common/fileUtils.js";
 
 export const AGGREGATOR_DOMAIN = `https://aggregator-api.kyberswap.com`;
 const __filename = fileURLToPath(import.meta.url);
@@ -36,13 +36,7 @@ function requiredParam(params, key) {
 }
 
 function writeOutputs(detailed, rawData) {
-  const detailedPath = path.join(__dirname, "swapOutputDetailed.txt");
-  const rawPath = path.join(__dirname, "swapOutputRaw.txt");
-
-  writeFileSync(detailedPath, `${JSON.stringify(detailed, null, 2)}\n`);
-  writeFileSync(rawPath, `${rawData}\n`);
-
-  return { detailedPath, rawPath };
+  return writeSwapOutputFiles(__dirname, detailed, rawData);
 }
 
 // Recursive function to retry on 429 rate limiting errors
@@ -112,17 +106,18 @@ export async function getKyberSwapData(params) {
       throw new Error("Kyber build returned empty data");
     }
 
+    // Dump full API responses for debugging
     const detailed = {
-      chainId,
-      swapType,
-      fromToken,
-      toToken,
-      amount,
-      slippageBps: 100, // 1%
-      router: tx.router,
-      value: tx.value ?? "0",
-      gas: tx.gas,
-      data: tx.data,
+      inputParams: {
+        chainId,
+        swapType,
+        fromToken,
+        toToken,
+        amount,
+        swapper,
+      },
+      routeResponse: routeResp,
+      buildResponse: buildResp,
     };
 
     return { detailed, raw: tx.data };
