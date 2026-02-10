@@ -5,7 +5,7 @@ import {console} from "forge-std/src/Script.sol";
 import {IERC20} from "@openzeppelin-contracts/token/ERC20/IERC20.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {LeverageLib} from "ceres-strategies/src/libraries/LeverageLib.sol";
-import {StrategyOperations} from "./StrategyOperations.sol";
+import {StrategyOperations} from "../StrategyOperations.sol";
 
 import {IOracleAdapter} from "ceres-strategies/src/interfaces/periphery/IOracleAdapter.sol";
 
