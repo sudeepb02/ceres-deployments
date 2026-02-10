@@ -7,8 +7,8 @@ import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol
 import {LeverageLib} from "ceres-strategies/src/libraries/LeverageLib.sol";
 import {IOracleAdapter} from "ceres-strategies/src/interfaces/periphery/IOracleAdapter.sol";
 
-import {StrategyOperations} from "./StrategyOperations.sol";
-import {FormatUtils} from "../../common/FormatUtils.sol";
+import {StrategyOperations} from "../StrategyOperations.sol";
+import {FormatUtils} from "../../../common/FormatUtils.sol";
 
 /// @title Rebalance_LeverageDown
 /// @notice Script to leverage down (deleverage) the USDf-sUSDf-USDC strategy
@@ -50,6 +50,9 @@ contract Rebalance_LeverageDown is StrategyOperations {
         // Log current state
         console.log("\n--- Current State: Before rebalance ---");
         _logStrategyState(strategy);
+
+        console.log("\n--- Strategy config ---");
+        _logStrategyConfig(strategy);
 
         uint256 targetDebt;
         uint16 targetLtvBps = strategy.targetLtvBps();

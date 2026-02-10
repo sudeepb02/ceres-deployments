@@ -174,18 +174,52 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         uint256 pricePerShare = strategy.convertToAssets(ONE_SHARE_UNIT);
 
         console.log("\n--- Strategy State ---");
-        FormatUtils.logWithSymbol("Total Assets:      ", totalAssets, 18, "USDf");
-        FormatUtils.logWithSymbol("Total Supply:      ", totalSupply, 18, "ceres-USDf");
-        FormatUtils.logWithSymbol("PricePerShare", pricePerShare, decimals, "USDf");
+        FormatUtils.logWithSymbol("Total Assets:      ", totalAssets, decimals, "USDf");
+        FormatUtils.logWithSymbol("Total Supply:      ", totalSupply, decimals, "ceres-USDf");
+        FormatUtils.logWithSymbol("PricePerShare      ", pricePerShare, decimals, "USDf");
 
-        FormatUtils.logWithSymbol("Net Assets:        ", netAssets, 18, "USDf");
-        FormatUtils.logWithSymbol("Collateral Amount: ", collateral, 18, "sUSDf");
+        FormatUtils.logWithSymbol("Net Assets:        ", netAssets, decimals, "USDf");
+        FormatUtils.logWithSymbol("Collateral Amount: ", collateral, decimals, "sUSDf");
         FormatUtils.logWithSymbol("Debt Amount:       ", debt, 6, "USDC");
         FormatUtils.logWithSymbol("Withdrawal Reserve:", withdrawalReserve, 18, "USDf");
         console.log("Current Request ID:", currentRequestId);
 
         FormatUtils.logBps("Current LTV:       ", ltv);
         FormatUtils.logBps("Target LTV:        ", targetLtv);
+
+        console.log("----------------------");
+    }
+
+    function _logStrategyConfig(LeveragedEuler strategy) internal view {
+        uint8 decimals = strategy.decimals();
+
+        uint128 withdawalReserve = strategy.withdrawalReserve();
+        uint128 currentRequestId = strategy.currentRequestId();
+        uint128 depositLimit = strategy.depositLimit();
+        uint128 redeemLimitShares = strategy.redeemLimitShares();
+
+        uint128 snapshotPps = strategy.snapshotPricePerShare();
+        uint128 minDepositAmount = strategy.minDepositAmount();
+
+        uint16 maxSlippageBps = strategy.maxSlippageBps();
+        uint16 performanceFeeBps = strategy.performanceFeeBps();
+        uint16 maxLossBps = strategy.maxLossBps();
+        uint48 lastReportTimestamp = strategy.lastReportTimestamp();
+        address performanceFeeRecipient = strategy.performanceFeeRecipient();
+
+        console.log("\n--- Strategy Config ---");
+        FormatUtils.logWithSymbol("Withdrawal Reserve:", withdawalReserve, decimals, "USDf");
+        console.log("Current Request ID:", currentRequestId);
+        FormatUtils.logWithSymbol("Deposit Limit:     ", depositLimit, decimals, "USDf");
+        FormatUtils.logWithSymbol("Redeem Limit (shares):", redeemLimitShares, decimals, "ceres-USDf");
+        FormatUtils.logWithSymbol("Snapshot PPS:      ", snapshotPps, decimals, "USDf");
+        FormatUtils.logWithSymbol("Min Deposit Amount:", minDepositAmount, decimals, "USDf");
+
+        FormatUtils.logBps("Max Slippage Bps:       ", maxSlippageBps);
+        FormatUtils.logBps("Performance Fee Bps:    ", performanceFeeBps);
+        FormatUtils.logBps("Max Loss Bps:           ", maxLossBps);
+        console.log("Last Report Timestamp:         ", lastReportTimestamp);
+        console.log("Performance Fee Recipient:     ", performanceFeeRecipient);
 
         console.log("----------------------");
     }

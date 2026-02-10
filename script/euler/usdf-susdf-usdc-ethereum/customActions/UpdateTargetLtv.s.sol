@@ -33,7 +33,7 @@ contract SwapAndDepositIdleAssets is StrategyOperations {
         console.log("\n--- Current State ---");
         _logStrategyState(strategy);
 
-        uint256 managementPvtKey = vm.envUint("MANAGEMENT_PRIVATE_KEY");
+        uint256 managementPvtKey = vm.envUint("MANAGEMENT_PVT_KEY");
         vm.startBroadcast(managementPvtKey);
 
         // Set target LTV to 83% for a 6x leverage
