@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {DeploymentConstants} from "../../common/DeploymentConstants.sol";
+import {FlashLoanRouter} from "ceres-strategies/src/periphery/FlashLoanRouter.sol";
 
 /// @title DeploymentConstantsUsdfEthereum
 /// @notice Strategy-specific constants for USDf-sUSDf-USDC Euler strategy on Ethereum
@@ -59,7 +60,7 @@ abstract contract DeploymentConstantsUsdfEthereum is DeploymentConstants {
 
     // Flash loan configuration
     address internal constant FLASH_LOAN_PROVIDER = SILO_USDC_FLASH_LOAN_PROVIDER;
-    uint8 internal constant FLASH_LOAN_SOURCE = 0; // FlashLoanRouter.FlashSource.ERC3156
+    FlashLoanRouter.FlashSource internal constant FLASH_LOAN_SOURCE = FlashLoanRouter.FlashSource.ERC3156; // Using ERC3156 flash loan provider (Silo)
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   STRATEGY PARAMETERS                                    //

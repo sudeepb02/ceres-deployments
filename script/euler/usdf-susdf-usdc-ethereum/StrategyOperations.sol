@@ -161,19 +161,27 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
 
     /// @notice Log current strategy state
     function _logStrategyState(LeveragedEuler strategy) internal view {
+        uint8 decimals = strategy.decimals();
+        uint256 ONE_SHARE_UNIT = 10 ** decimals;
+
         (uint256 netAssets, uint256 collateral, uint256 debt) = strategy.getNetAssets();
         uint256 ltv = strategy.getStrategyLtv();
         uint256 totalAssets = strategy.totalAssets();
         uint256 targetLtv = strategy.targetLtvBps();
         uint256 withdrawalReserve = strategy.withdrawalReserve();
         uint256 currentRequestId = strategy.currentRequestId();
+        uint256 totalSupply = strategy.totalSupply();
+        uint256 pricePerShare = strategy.convertToAssets(ONE_SHARE_UNIT);
 
         console.log("\n--- Strategy State ---");
-        FormatUtils.logWithSymbol("Total Assets:      ", totalAssets, 18, "sUSDf");
-        FormatUtils.logWithSymbol("Net Assets:        ", netAssets, 18, "sUSDf");
+        FormatUtils.logWithSymbol("Total Assets:      ", totalAssets, 18, "USDf");
+        FormatUtils.logWithSymbol("Total Supply:      ", totalSupply, 18, "ceres-USDf");
+        FormatUtils.logWithSymbol("PricePerShare", pricePerShare, decimals, "USDf");
+
+        FormatUtils.logWithSymbol("Net Assets:        ", netAssets, 18, "USDf");
         FormatUtils.logWithSymbol("Collateral Amount: ", collateral, 18, "sUSDf");
         FormatUtils.logWithSymbol("Debt Amount:       ", debt, 6, "USDC");
-        FormatUtils.logWithSymbol("Withdrawal Reserve:", withdrawalReserve, 18, "sUSDf");
+        FormatUtils.logWithSymbol("Withdrawal Reserve:", withdrawalReserve, 18, "USDf");
         console.log("Current Request ID:", currentRequestId);
 
         FormatUtils.logBps("Current LTV:       ", ltv);
