@@ -7,13 +7,51 @@ import {IERC20Metadata} from "@openzeppelin-contracts/token/ERC20/extensions/IER
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {ICeresBaseStrategy} from "ceres-strategies/src/interfaces/strategies/ICeresBaseStrategy.sol";
 import {LeverageLib} from "ceres-strategies/src/libraries/LeverageLib.sol";
-import {DeploymentConstantsUsdfEthereum} from "./DeploymentConstantsUsdfEthereum.sol";
-import {FormatUtils} from "../../common/FormatUtils.sol";
+import {CeresSwapper} from "ceres-strategies/src/periphery/CeresSwapper.sol";
+import {FlashLoanRouter} from "ceres-strategies/src/periphery/FlashLoanRouter.sol";
+import {FormatUtils} from "../common/FormatUtils.sol";
 
 /// @title StrategyOperations
-/// @notice Base contract with common operations for USDf-sUSDf-USDC strategy scripts
+/// @notice Generic base contract with common operations for strategy operational scripts
 /// @dev Contains reusable helper functions for swap data fetching, idle asset deposits, and logging
-abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum {
+/// @dev Strategy-agnostic - reads all configuration from the strategy contract itself
+abstract contract StrategyOperations is Script {
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                                   STRATEGY ACCESS                                        //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// @notice Get the strategy address from environment variable
+    /// @return strategy The strategy contract instance
+    function _getStrategy() internal view returns (LeveragedEuler strategy) {
+        address strategyAddress = vm.envAddress("STRATEGY_ADDRESS");
+        require(strategyAddress != address(0), "STRATEGY_ADDRESS not set");
+        return LeveragedEuler(strategyAddress);
+    }
+
+    /// @notice Get token addresses from the strategy
+    /// @param strategy The strategy contract
+    /// @return asset The asset token address
+    /// @return collateral The collateral token address
+    /// @return debt The debt token address
+    function _getTokens(
+        LeveragedEuler strategy
+    ) internal view returns (address asset, address collateral, address debt) {
+        asset = strategy.asset();
+        collateral = address(strategy.COLLATERAL_TOKEN());
+        debt = address(strategy.DEBT_TOKEN());
+    }
+
+    /// @notice Get periphery contract addresses from the strategy
+    /// @param strategy The strategy contract
+    /// @return swapper The CeresSwapper address
+    /// @return flashLoanRouter The FlashLoanRouter address
+    function _getPeripheryContracts(
+        LeveragedEuler strategy
+    ) internal view returns (address swapper, address flashLoanRouter) {
+        swapper = address(strategy.swapper());
+        flashLoanRouter = address(strategy.flashLoanRouter());
+    }
+
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   DEPOSIT IDLE ASSETS                                    //
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -22,37 +60,33 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
     /// @dev Swaps asset tokens to collateral and deposits them into the vault
     /// @param strategy The strategy contract
     function _depositIdleAssets(LeveragedEuler strategy) internal {
-        // Check if asset and collateral are the same
-        bool isAssetCollateral = strategy.IS_ASSET_COLLATERAL();
+        (address asset, address collateral, ) = _getTokens(strategy);
 
-        if (isAssetCollateral) {
+        if (strategy.IS_ASSET_COLLATERAL()) {
             console.log("\nAsset is collateral - no swap needed before deposit");
             return;
         }
 
         // Get current asset balance and withdrawal reserve
-        uint256 assetBalance = IERC20(ASSET_TOKEN).balanceOf(address(strategy));
+        uint256 assetBalance = IERC20(asset).balanceOf(address(strategy));
         uint256 withdrawalReserve = strategy.withdrawalReserve();
 
         console.log("\n--- Checking for Idle Assets ---");
-        FormatUtils.logWithSymbol("Asset balance:     ", assetBalance, 18, "sUSDf");
-        FormatUtils.logWithSymbol("Withdrawal reserve:", withdrawalReserve, 18, "sUSDf");
+        uint8 assetDecimals = IERC20Metadata(asset).decimals();
+
+        FormatUtils.logWithSymbol("Asset balance:     ", assetBalance, assetDecimals, "AssetTokens");
+        FormatUtils.logWithSymbol("Withdrawal reserve:", withdrawalReserve, assetDecimals, "AssetTokens");
 
         // Calculate available assets for deposit
         if (assetBalance > withdrawalReserve) {
             uint256 idleAssets = assetBalance - withdrawalReserve;
-            FormatUtils.logWithSymbol("Idle assets to deposit:", idleAssets, 18, "sUSDf");
+            FormatUtils.logWithSymbol("Idle assets to deposit:", idleAssets, assetDecimals, "AssetTokens");
 
             if (idleAssets > 0) {
                 console.log("\nSwapping and depositing idle assets...");
 
                 // Get swap data for asset -> collateral
-                bytes memory assetToCollateralSwapData = _getSwapData(
-                    address(ASSET_TOKEN),
-                    address(COLLATERAL_TOKEN),
-                    idleAssets,
-                    true
-                );
+                bytes memory assetToCollateralSwapData = _getSwapData(strategy, asset, collateral, idleAssets, true);
 
                 // Execute swapAndDepositCollateral
                 strategy.swapAndDepositCollateral(idleAssets, assetToCollateralSwapData);
@@ -69,12 +103,14 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     /// @notice Get swap data from aggregator based on configuration
+    /// @param strategy The strategy contract
     /// @param fromToken Token to swap from
     /// @param toToken Token to swap to
     /// @param amount Amount to swap (debt amount for leverage down, will be converted internally if needed)
     /// @param isLeverageUp True for leverage up (exactIn), false for leverage down (exactOut if available)
     /// @return swapData Encoded swap calldata
     function _getSwapData(
+        LeveragedEuler strategy,
         address fromToken,
         address toToken,
         uint256 amount,
@@ -89,17 +125,18 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         bool useParaswap = _shouldUseParaswap(isLeverageUp);
 
         uint256 swapAmount = amount;
+        (address swapper, ) = _getPeripheryContracts(strategy);
 
         if (useParaswap) {
             // Use Paraswap
             // Leverage up: exactIn (spend exact debt/asset, get collateral)
             // Leverage down: exactOut (sell collateral, get exact debt)
             string memory swapType = isLeverageUp ? "exactIn" : "exactOut";
-            swapData = _getParaswapSwapData(fromToken, toToken, swapAmount, swapType);
+            swapData = _getParaswapSwapData(fromToken, toToken, swapAmount, swapType, swapper);
             console.log("Using Paraswap (", swapType, ")");
         } else {
             // Use Kyberswap (always exactIn)
-            swapData = _getKyberswapSwapData(fromToken, toToken, swapAmount);
+            swapData = _getKyberswapSwapData(fromToken, toToken, swapAmount, swapper);
             console.log("Using Kyberswap (exactIn)");
         }
 
@@ -116,7 +153,12 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
     }
 
     /// @notice Get Kyberswap swap data (exactIn)
-    function _getKyberswapSwapData(address fromToken, address toToken, uint256 amount) internal returns (bytes memory) {
+    function _getKyberswapSwapData(
+        address fromToken,
+        address toToken,
+        uint256 amount,
+        address swapper
+    ) internal returns (bytes memory) {
         string[] memory inputs = new string[](8);
         inputs[0] = "node";
         inputs[1] = "script/js/kyber/printKyberswapSwapData.js";
@@ -124,7 +166,7 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         inputs[3] = vm.toString(fromToken);
         inputs[4] = vm.toString(toToken);
         inputs[5] = vm.toString(amount);
-        inputs[6] = vm.toString(CERES_SWAPPER_ADDRESS);
+        inputs[6] = vm.toString(swapper);
         inputs[7] = "exactIn";
 
         return vm.ffi(inputs);
@@ -135,7 +177,8 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         address fromToken,
         address toToken,
         uint256 amount,
-        string memory swapType
+        string memory swapType,
+        address swapper
     ) internal returns (bytes memory) {
         uint8 fromTokenDecimals = IERC20Metadata(fromToken).decimals();
         uint8 toTokenDecimals = IERC20Metadata(toToken).decimals();
@@ -147,7 +190,7 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         inputs[3] = vm.toString(fromToken);
         inputs[4] = vm.toString(toToken);
         inputs[5] = vm.toString(amount);
-        inputs[6] = vm.toString(CERES_SWAPPER_ADDRESS);
+        inputs[6] = vm.toString(swapper);
         inputs[7] = swapType;
         inputs[8] = vm.toString(fromTokenDecimals);
         inputs[9] = vm.toString(toTokenDecimals);
@@ -161,27 +204,36 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
 
     /// @notice Log current strategy state
     function _logStrategyState(LeveragedEuler strategy) internal view {
-        uint8 decimals = strategy.decimals();
-        uint256 ONE_SHARE_UNIT = 10 ** decimals;
+        (address asset, address collateral, address debt) = _getTokens(strategy);
 
-        (uint256 netAssets, uint256 collateral, uint256 debt) = strategy.getNetAssets();
+        uint8 decimals = strategy.decimals();
+        uint8 assetDecimals = IERC20Metadata(asset).decimals();
+
+        (uint256 netAssets, uint256 collateralAmount, uint256 debtAmount) = strategy.getNetAssets();
         uint256 ltv = strategy.getStrategyLtv();
-        uint256 totalAssets = strategy.totalAssets();
         uint256 targetLtv = strategy.targetLtvBps();
         uint256 withdrawalReserve = strategy.withdrawalReserve();
         uint256 currentRequestId = strategy.currentRequestId();
-        uint256 totalSupply = strategy.totalSupply();
-        uint256 pricePerShare = strategy.convertToAssets(ONE_SHARE_UNIT);
 
         console.log("\n--- Strategy State ---");
-        FormatUtils.logWithSymbol("Total Assets:      ", totalAssets, decimals, "USDf");
-        FormatUtils.logWithSymbol("Total Supply:      ", totalSupply, decimals, "ceres-USDf");
-        FormatUtils.logWithSymbol("PricePerShare      ", pricePerShare, decimals, "USDf");
+        FormatUtils.logWithSymbol("Total Assets:      ", strategy.totalAssets(), assetDecimals, "AssetTokens");
+        FormatUtils.logWithSymbol("Total Supply:      ", strategy.totalSupply(), decimals, "shares");
+        FormatUtils.logWithSymbol(
+            "PricePerShare:     ",
+            strategy.convertToAssets(10 ** decimals),
+            assetDecimals,
+            "AssetTokens"
+        );
 
-        FormatUtils.logWithSymbol("Net Assets:        ", netAssets, decimals, "USDf");
-        FormatUtils.logWithSymbol("Collateral Amount: ", collateral, decimals, "sUSDf");
-        FormatUtils.logWithSymbol("Debt Amount:       ", debt, 6, "USDC");
-        FormatUtils.logWithSymbol("Withdrawal Reserve:", withdrawalReserve, 18, "USDf");
+        FormatUtils.logWithSymbol("Net Assets:        ", netAssets, assetDecimals, "AssetTokens");
+        FormatUtils.logWithSymbol(
+            "Collateral Amount: ",
+            collateralAmount,
+            IERC20Metadata(collateral).decimals(),
+            "CollateralTokens"
+        );
+        FormatUtils.logWithSymbol("Debt Amount:       ", debtAmount, IERC20Metadata(debt).decimals(), "DebtTokens");
+        FormatUtils.logWithSymbol("Withdrawal Reserve:", withdrawalReserve, assetDecimals, "AssetTokens");
         console.log("Current Request ID:", currentRequestId);
 
         FormatUtils.logBps("Current LTV:       ", ltv);
@@ -190,14 +242,17 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         console.log("----------------------");
     }
 
+    /// @notice Log strategy configuration
     function _logStrategyConfig(LeveragedEuler strategy) internal view {
-        uint8 decimals = strategy.decimals();
+        (address asset, , ) = _getTokens(strategy);
 
-        uint128 withdawalReserve = strategy.withdrawalReserve();
+        uint8 decimals = strategy.decimals();
+        uint8 assetDecimals = IERC20Metadata(asset).decimals();
+
+        uint128 withdrawalReserve = strategy.withdrawalReserve();
         uint128 currentRequestId = strategy.currentRequestId();
         uint128 depositLimit = strategy.depositLimit();
         uint128 redeemLimitShares = strategy.redeemLimitShares();
-
         uint128 snapshotPps = strategy.snapshotPricePerShare();
         uint128 minDepositAmount = strategy.minDepositAmount();
 
@@ -208,12 +263,12 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         address performanceFeeRecipient = strategy.performanceFeeRecipient();
 
         console.log("\n--- Strategy Config ---");
-        FormatUtils.logWithSymbol("Withdrawal Reserve:", withdawalReserve, decimals, "USDf");
+        FormatUtils.logWithSymbol("Withdrawal Reserve:", withdrawalReserve, assetDecimals, "AssetTokens");
         console.log("Current Request ID:", currentRequestId);
-        FormatUtils.logWithSymbol("Deposit Limit:     ", depositLimit, decimals, "USDf");
-        FormatUtils.logWithSymbol("Redeem Limit (shares):", redeemLimitShares, decimals, "ceres-USDf");
-        FormatUtils.logWithSymbol("Snapshot PPS:      ", snapshotPps, decimals, "USDf");
-        FormatUtils.logWithSymbol("Min Deposit Amount:", minDepositAmount, decimals, "USDf");
+        FormatUtils.logWithSymbol("Deposit Limit:     ", depositLimit, assetDecimals, "AssetTokens");
+        FormatUtils.logWithSymbol("Redeem Limit (shares):", redeemLimitShares, decimals, "ShareTokens");
+        FormatUtils.logWithSymbol("Snapshot PPS:      ", snapshotPps, assetDecimals, "AssetTokens");
+        FormatUtils.logWithSymbol("Min Deposit Amount:", minDepositAmount, assetDecimals, "AssetTokens");
 
         FormatUtils.logBps("Max Slippage Bps:       ", maxSlippageBps);
         FormatUtils.logBps("Performance Fee Bps:    ", performanceFeeBps);
@@ -260,36 +315,47 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         uint128 requestId,
         ICeresBaseStrategy.RequestDetails memory request
     ) internal returns (bytes memory extraData) {
+        (address asset, address collateral, address debt) = _getTokens(strategy);
+
         // If asset is collateral, no swaps needed
         if (strategy.IS_ASSET_COLLATERAL()) {
             console.log("\nAsset is collateral - no swaps needed");
             return "";
         }
 
-        // Calculate expected assets from shares
-        uint256 expectedAssets = strategy.convertToAssets(request.totalShares);
-        FormatUtils.logWithSymbol("\nExpected assets to withdraw:", expectedAssets, 18, "sUSDf");
+        uint256 amountToFree;
+        uint256 expectedAssets;
+        bytes memory collateralToAssetSwapData = "";
 
-        // Get current idle assets (balance - withdrawal reserve)
-        uint256 assetBalance = IERC20(ASSET_TOKEN).balanceOf(address(strategy));
-        uint256 withdrawalReserve = strategy.withdrawalReserve();
-        uint256 idleAssets = assetBalance > withdrawalReserve ? assetBalance - withdrawalReserve : 0;
+        // Code block to prevent stack too deep error
+        {
+            uint8 assetDecimals = IERC20Metadata(asset).decimals();
 
-        FormatUtils.logWithSymbol("Asset balance:        ", assetBalance, 18, "sUSDf");
-        FormatUtils.logWithSymbol("Withdrawal reserve:   ", withdrawalReserve, 18, "sUSDf");
-        FormatUtils.logWithSymbol("Idle assets:          ", idleAssets, 18, "sUSDf");
+            // Calculate expected assets from shares
+            expectedAssets = strategy.convertToAssets(request.totalShares);
+            FormatUtils.logWithSymbol("\nExpected assets to withdraw:", expectedAssets, assetDecimals, "AssetTokens");
 
-        // Calculate how much more assets we need
-        uint256 amountToFree = expectedAssets > idleAssets ? expectedAssets - idleAssets : 0;
-        FormatUtils.logWithSymbol("Additional assets needed:", amountToFree, 18, "sUSDf");
+            // Get current idle assets (balance - withdrawal reserve)
+            uint256 assetBalance = IERC20(asset).balanceOf(address(strategy));
+            uint256 withdrawalReserve = strategy.withdrawalReserve();
+            uint256 idleAssets = assetBalance > withdrawalReserve ? assetBalance - withdrawalReserve : 0;
+
+            FormatUtils.logWithSymbol("Asset balance:        ", assetBalance, assetDecimals, "AssetTokens");
+            FormatUtils.logWithSymbol("Withdrawal reserve:   ", withdrawalReserve, assetDecimals, "AssetTokens");
+            FormatUtils.logWithSymbol("Idle assets:          ", idleAssets, assetDecimals, "AssetTokens");
+
+            // Calculate how much more assets we need
+            amountToFree = expectedAssets > idleAssets ? expectedAssets - idleAssets : 0;
+            FormatUtils.logWithSymbol("Additional assets needed:", amountToFree, assetDecimals, "AssetTokens");
+        }
 
         // Build collateral -> asset swap data if needed
-        bytes memory collateralToAssetSwapData = "";
         if (amountToFree > 0) {
             console.log("\nFetching collateral -> asset swap data...");
             collateralToAssetSwapData = _getSwapData(
-                address(COLLATERAL_TOKEN),
-                address(ASSET_TOKEN),
+                strategy,
+                collateral,
+                asset,
                 amountToFree,
                 false // Use exactIn for collateral -> asset (Kyberswap)
             );
@@ -297,18 +363,23 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
 
         // Calculate rebalance amount (debt to repay)
         uint256 rebalanceAmount = _getRebalanceAmountForWithdraw(strategy, expectedAssets);
-        FormatUtils.logWithSymbol("\nDebt to repay (rebalance amount):", rebalanceAmount, 6, "USDC");
+        FormatUtils.logWithSymbol(
+            "\nDebt to repay (rebalance amount):",
+            rebalanceAmount,
+            IERC20Metadata(debt).decimals(),
+            "Debt Tokens"
+        );
 
         // Build flash loan swap data if rebalancing is needed
         bytes memory flashLoanSwapData = "";
         if (rebalanceAmount > 0) {
             console.log("\nFetching deleverage swap data (collateral -> debt)...");
-            flashLoanSwapData = _getSwapData(address(COLLATERAL_TOKEN), address(DEBT_TOKEN), rebalanceAmount, false);
+            flashLoanSwapData = _getSwapData(strategy, collateral, debt, rebalanceAmount, false);
         }
 
         // Encode extraData
         extraData = abi.encode(flashLoanSwapData, collateralToAssetSwapData);
-        console.log("\n ExtraData built successfully");
+        console.log("\nExtraData built successfully");
     }
 
     /// @notice Calculates how much debt needs to be repaid for a withdrawal
@@ -319,17 +390,27 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
         LeveragedEuler strategy,
         uint256 withdrawAmount
     ) internal view returns (uint256 rebalanceAmount) {
+        (address asset, , address debt) = _getTokens(strategy);
+
+        uint8 assetDecimals = IERC20Metadata(asset).decimals();
+        uint8 debtDecimals = IERC20Metadata(debt).decimals();
+
         (uint256 netAssets, , uint256 totalDebt) = strategy.getNetAssets();
 
         console.log("\n--- Calculating Rebalance Amount ---");
-        FormatUtils.logWithSymbol("Net assets:     ", netAssets, 18, "sUSDf");
-        FormatUtils.logWithSymbol("Total debt:     ", totalDebt, 6, "USDC");
-        FormatUtils.logWithSymbol("Withdraw amount:", withdrawAmount, 18, "sUSDf");
+        FormatUtils.logWithSymbol("Net assets:     ", netAssets, assetDecimals, "AssetTokens");
+        FormatUtils.logWithSymbol("Total debt:     ", totalDebt, debtDecimals, "DebtTokens");
+        FormatUtils.logWithSymbol("Withdraw amount:", withdrawAmount, assetDecimals, "AssetTokens");
 
         // Cap withdraw amount at net assets
         if (withdrawAmount > netAssets) {
             withdrawAmount = netAssets;
-            FormatUtils.logWithSymbol("Capped withdraw amount to net assets:", withdrawAmount, 18, "sUSDf");
+            FormatUtils.logWithSymbol(
+                "Capped withdraw amount to net assets:",
+                withdrawAmount,
+                assetDecimals,
+                "AssetTokens"
+            );
         }
 
         // Calculate target debt after withdrawal
@@ -339,11 +420,11 @@ abstract contract StrategyOperations is Script, DeploymentConstantsUsdfEthereum 
             strategy.oracleAdapter()
         );
 
-        FormatUtils.logWithSymbol("Target debt after withdrawal:", targetDebt, 6, "USDC");
+        FormatUtils.logWithSymbol("Target debt after withdrawal:", targetDebt, debtDecimals, "DebtTokens");
 
         // Rebalance amount is the difference between current and target debt
         rebalanceAmount = totalDebt > targetDebt ? totalDebt - targetDebt : 0;
-        FormatUtils.logWithSymbol("Calculated rebalance amount: ", rebalanceAmount, 6, "USDC");
+        FormatUtils.logWithSymbol("Calculated rebalance amount: ", rebalanceAmount, debtDecimals, "DebtTokens");
 
         return rebalanceAmount;
     }

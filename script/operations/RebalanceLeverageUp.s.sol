@@ -3,41 +3,38 @@ pragma solidity 0.8.28;
 
 import {console} from "forge-std/src/Script.sol";
 import {IERC20} from "@openzeppelin-contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {LeverageLib} from "ceres-strategies/src/libraries/LeverageLib.sol";
+import {StrategyOperations} from "./StrategyOperations.sol";
+import {FormatUtils} from "../common/FormatUtils.sol";
 
-import {StrategyOperations} from "../StrategyOperations.sol";
-import {FormatUtils} from "../../../common/FormatUtils.sol";
-
-/// @title Rebalance_LeverageUp
-/// @notice Script to leverage up the USDf-sUSDf-USDC strategy
-/// @dev Borrows more debt and swaps it for collateral to increase leverage
-contract Rebalance_LeverageUp is StrategyOperations {
-    ///////////////////////////////////////////////////////////////////////////////////////////////
-    //                                   CONFIGURATION                                          //
-    ///////////////////////////////////////////////////////////////////////////////////////////////
-
-    // Set to true to use Paraswap (exactIn), false to use Kyberswap (exactIn)
-    // For leverage up, both use exactIn, but you can toggle based on preference
-    bool constant EXACT_OUT_AVAILABLE = false;
-
-    // Set to true to use flash loans, false to supply debt tokens directly
-    bool constant USE_FLASH_LOAN = true;
-
+/// @title RebalanceLeverageUp
+/// @notice Generic script to leverage up (increase leverage) for any leveraged strategy
+/// @dev Reads strategy address from STRATEGY_ADDRESS env var
+/// @dev Optional: Set USE_FLASH_LOAN=false to supply debt tokens directly
+/// @dev Usage: STRATEGY_ADDRESS=0x... forge script script/common/operations/RebalanceLeverageUp.s.sol
+contract RebalanceLeverageUp is StrategyOperations {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   MAIN EXECUTION                                         //
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     function run() external {
+        // Get contract instances
+        LeveragedEuler strategy = _getStrategy();
+        (address asset, address collateral, address debt) = _getTokens(strategy);
+
+        // Determine if using flash loan (default: true)
+        bool useFlashLoan = true;
+        try vm.envBool("USE_FLASH_LOAN") returns (bool _useFlashLoan) {
+            useFlashLoan = _useFlashLoan;
+        } catch {}
         console.log("==============================================");
         console.log("Leverage Up Rebalance");
         console.log("==============================================");
-        console.log("Strategy:", LEVERAGED_EULER_STRATEGY_ADDRESS);
-        console.log("Use Flash Loan:", USE_FLASH_LOAN);
-        console.log("Exact Out Available:", EXACT_OUT_AVAILABLE);
+        console.log("Strategy:", address(strategy));
+        console.log("Use Flash Loan:", useFlashLoan);
 
-        // Get contract instances
-        LeveragedEuler strategy = LeveragedEuler(LEVERAGED_EULER_STRATEGY_ADDRESS);
         uint16 targetLtvBps = strategy.targetLtvBps();
 
         // Log current state
@@ -47,26 +44,25 @@ contract Rebalance_LeverageUp is StrategyOperations {
         uint256 targetDebt;
         (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
 
-        FormatUtils.logWithSymbol("Net assets", netAssets, 18, "USDf");
-        FormatUtils.logWithSymbol("Total Collateral", totalCollateral, 18, "sUSDf");
-        FormatUtils.logWithSymbol("Total Debt", totalDebt, 6, "USDC");
-
-        // Calculate target debt amount
         targetDebt = LeverageLib.computeTargetDebt(netAssets, targetLtvBps, strategy.oracleAdapter());
-
         console.log("Target debt amount:", targetDebt);
 
         uint256 debtAmount = targetDebt > totalDebt ? targetDebt - totalDebt : 0;
-        if (debtAmount == 0) {
-            revert("Leverage up not possible, already at or above target LTV");
-        }
+        if (debtAmount == 0) revert("Leverage up not possible, already at or above target LTV");
 
-        bytes memory swapData = _getSwapData(address(DEBT_TOKEN), address(COLLATERAL_TOKEN), debtAmount, true);
+        FormatUtils.logWithSymbol(
+            "Additional Debt to borrow:",
+            debtAmount,
+            IERC20Metadata(debt).decimals(),
+            "DebtTokens"
+        );
+
+        bytes memory swapData = _getSwapData(strategy, debt, collateral, debtAmount, true);
 
         uint256 keeperPrivateKey = vm.envUint("KEEPER_PVT_KEY");
         vm.startBroadcast(keeperPrivateKey);
 
-        if (USE_FLASH_LOAN) {
+        if (useFlashLoan) {
             // Use flash loan to rebalance
             console.log("\nExecuting rebalanceUsingFlashLoan...");
             strategy.rebalanceUsingFlashLoan(debtAmount, true, swapData);
@@ -75,7 +71,7 @@ contract Rebalance_LeverageUp is StrategyOperations {
             console.log("\nSupplying debt tokens to strategy through keeper...");
 
             // Approve strategy to pull debt tokens
-            IERC20(DEBT_TOKEN).approve(address(strategy), debtAmount);
+            IERC20(debt).approve(address(strategy), debtAmount);
 
             console.log("Executing rebalance...");
             strategy.rebalance(debtAmount, true, swapData);
@@ -97,8 +93,12 @@ contract Rebalance_LeverageUp is StrategyOperations {
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     /// @notice Override to customize swap provider selection
-    /// @dev Uses EXACT_OUT_AVAILABLE constant to determine provider
-    function _shouldUseParaswap(bool /* isLeverageUp */) internal pure override returns (bool) {
-        return EXACT_OUT_AVAILABLE;
+    /// @dev Uses EXACT_OUT_AVAILABLE env var to determine provider (defaults to Kyberswap)
+    function _shouldUseParaswap(bool /* isLeverageUp */) internal view override returns (bool) {
+        try vm.envBool("EXACT_OUT_AVAILABLE") returns (bool exactOutAvailable) {
+            return exactOutAvailable;
+        } catch {
+            return false;
+        }
     }
 }

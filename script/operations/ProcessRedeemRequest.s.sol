@@ -4,30 +4,30 @@ pragma solidity 0.8.28;
 import {console} from "forge-std/src/Script.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {ICeresBaseStrategy} from "ceres-strategies/src/interfaces/strategies/ICeresBaseStrategy.sol";
-import {StrategyOperations} from "../StrategyOperations.sol";
-import {FormatUtils} from "../../../common/FormatUtils.sol";
+import {StrategyOperations} from "./StrategyOperations.sol";
+import {FormatUtils} from "../common/FormatUtils.sol";
 
 /// @title ProcessRedeemRequest
-/// @notice Processes the current pending redeem request for the USDf-sUSDf-USDC strategy
-/// @dev This script handles the async withdrawal flow by deleveraging and freeing assets as needed
+/// @notice Generic script to process pending redeem requests for any strategy
+/// @dev Reads strategy address from STRATEGY_ADDRESS env var
+/// @dev Optional: Set EXACT_OUT_AVAILABLE=true to use Paraswap exactOut swaps
+/// @dev Usage: STRATEGY_ADDRESS=0x... forge script script/common/operations/ProcessRedeemRequest.s.sol
 contract ProcessRedeemRequest is StrategyOperations {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   CONFIGURATION                                          //
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
-    bool constant EXACT_OUT_AVAILABLE = false;
-    bool constant USE_FLASH_LOAN = true;
-
     // Tolerance for LTV checks (in bps)
-    uint256 constant LTV_TOLERANCE_BPS = 50; // 0.5%
+    uint256 constant LTV_TOLERANCE_BPS = 100; // 1%
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   MAIN EXECUTION                                         //
     ///////////////////////////////////////////////////////////////////////////////////////////////
+
     /// @notice Main execution function
     function run() external {
         // Load strategy
-        LeveragedEuler strategy = LeveragedEuler(LEVERAGED_EULER_STRATEGY_ADDRESS);
+        LeveragedEuler strategy = _getStrategy();
 
         // Get keeper private key
         uint256 keeperPvtKey = vm.envUint("KEEPER_PVT_KEY");
@@ -72,16 +72,25 @@ contract ProcessRedeemRequest is StrategyOperations {
         strategy.processCurrentRequest(extraData);
         vm.stopBroadcast();
 
-        console.log("\n Request processed successfully");
+        console.log("\nRequest processed successfully");
 
         // Log strategy state after processing
         console.log("\n--- Strategy State AFTER Processing ---");
         _logStrategyState(strategy);
+
+        console.log("\n==============================================");
+        console.log("Redeem Request Processed Successfully!");
+        console.log("==============================================");
     }
 
     /// @notice Overrides the parent function to use Paraswap for exactOut swaps during deleveraging
     /// @return shouldUse True if Paraswap should be used
     function _shouldUseParaswap(bool /* isLeverageUp */) internal view override returns (bool) {
-        return EXACT_OUT_AVAILABLE;
+        // Check if EXACT_OUT_AVAILABLE env var is set (defaults to false if not set)
+        try vm.envBool("EXACT_OUT_AVAILABLE") returns (bool exactOutAvailable) {
+            return exactOutAvailable;
+        } catch {
+            return false;
+        }
     }
 }
