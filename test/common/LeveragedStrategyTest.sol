@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {console} from "forge-std/src/Test.sol";
+import {console} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin-contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin-contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -41,7 +41,8 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_SetupStrategy_IsValid() public view {
         assertTrue(address(0) != address(strategy), "Strategy should be deployed");
         assertEq(strategy.asset(), address(assetToken), "Asset should match");
-        assertEq(strategy.performanceFeeRecipient(), feeReceiver, "Fee receiver should match");
+        (, , , , address performanceFeeRecipient_, ) = _baseConfig();
+        assertEq(performanceFeeRecipient_, feeReceiver, "Fee receiver should match");
         assertTrue(roleManager.hasRole(MANAGEMENT_ROLE, management), "Management should match");
         assertTrue(roleManager.hasRole(KEEPER_ROLE, keeper), "Keeper should match");
     }
@@ -49,16 +50,17 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_InitialValues_LeveragedStrategy() public view {
         assertEq(address(strategy.COLLATERAL_TOKEN()), address(collateralToken), "COLLATERAL_TOKEN mismatch");
         assertEq(address(strategy.DEBT_TOKEN()), address(debtToken), "DEBT_TOKEN mismatch");
-        assertTrue(strategy.IS_ASSET_COLLATERAL(), "IS_ASSET_COLLATERAL should be true");
+        assertTrue(_isAssetCollateral(), "IS_ASSET_COLLATERAL should be true");
         assertEq(strategy.BPS_PRECISION(), 100_00, "BPS_PRECISION mismatch");
 
         assertEq(address(strategy.oracleAdapter()), address(oracleAdapter), "oracleAdapter mismatch");
-        assertEq(address(strategy.swapper()), address(swapper), "swapper mismatch");
+        assertEq(_swapperAddress(), address(swapper), "swapper mismatch");
 
-        assertEq(strategy.targetLtvBps(), TARGET_LTV_BPS, "targetLtvBps mismatch");
-        assertEq(strategy.maxSlippageBps(), MAX_SLIPPAGE_BPS, "maxSlippageBps mismatch");
-        assertEq(strategy.depositLimit(), DEPOSIT_LIMIT, "depositLimit mismatch");
-        assertEq(strategy.redeemLimitShares(), REDEEM_LIMIT_SHARES, "redeemLimit mismatch");
+        assertEq(_targetLtvBps(), TARGET_LTV_BPS, "targetLtvBps mismatch");
+        assertEq(_maxSlippageBps(), MAX_SLIPPAGE_BPS, "maxSlippageBps mismatch");
+        (uint128 depositLimit_, uint128 redeemLimitShares_, ) = _depositWithdrawLimits();
+        assertEq(depositLimit_, DEPOSIT_LIMIT, "depositLimit mismatch");
+        assertEq(redeemLimitShares_, REDEEM_LIMIT_SHARES, "redeemLimit mismatch");
     }
 
     function test_InitialValues_BaseStrategy() public view {
@@ -70,8 +72,9 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         assertTrue(keeper != address(0), "keeper should not be zero");
         assertTrue(roleManager.hasRole(KEEPER_ROLE, keeper), "Keeper should match");
 
-        assertEq(strategy.performanceFeeRecipient(), feeReceiver, "performanceFeeRecipient mismatch");
-        assertEq(strategy.performanceFeeBps(), 1500, "performanceFee should be 1500 (15%)");
+        (, uint16 performanceFeeBps_, , , address performanceFeeRecipient_, ) = _baseConfig();
+        assertEq(performanceFeeRecipient_, feeReceiver, "performanceFeeRecipient mismatch");
+        assertEq(performanceFeeBps_, 1500, "performanceFee should be 1500 (15%)");
 
         assertEq(strategy.totalSupply(), 0, "totalSupply should be 0");
         assertEq(strategy.totalAssets(), 0, "totalAssets should be 0");
@@ -1004,16 +1007,15 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         (uint256 netAssets, uint256 totalCollateral, uint256 debt) = strategy.getNetAssets();
         uint256 deleverageAmount = debt / 2;
-        
+
         console.log("netAssets before", netAssets);
         console.log("totalCollateral before", totalCollateral);
         console.log("debt before", debt);
         console.log("deleverageAmount", deleverageAmount);
 
-
-
         bytes memory swapData;
-        if (strategy.isExactOutSwapEnabled()) {
+        (bool isExactOutSwapEnabled, , , , ) = strategy.getLeveragedStrategyConfig();
+        if (isExactOutSwapEnabled) {
             swapData = _getParaswapSwapData(
                 CHAIN_ID,
                 address(collateralToken),
@@ -1350,7 +1352,8 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         // Set slippage to zero, as actual swaps have non-zero slippage, so the tx should revert
         vm.prank(management);
-        strategy.setMaxSlippage(0);
+        (, uint16 performanceFeeBps_, uint16 maxLossBps_, , , ) = _baseConfig();
+        strategy.updateConfig(0, performanceFeeBps_, maxLossBps_);
 
         uint256 debtAmount = LeverageLib.computeTargetDebt(DEFAULT_DEPOSIT(), TARGET_LTV_BPS, strategy.oracleAdapter());
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
@@ -1369,7 +1372,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
     function testRevert_SwapAndDepositCollateral() public {
         // If Asset is collateral, then swapAndDepositCollateral function should revert
-        if (strategy.IS_ASSET_COLLATERAL()) {
+        if (_isAssetCollateral()) {
             vm.prank(keeper);
             vm.expectRevert(LibError.InvalidAction.selector);
             strategy.swapAndDepositCollateral(1000 * 1e18, "");
@@ -1407,29 +1410,29 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         emit ILeveragedStrategy.TargetLtvUpdated(newLtv);
         strategy.setTargetLtv(newLtv);
 
-        assertEq(strategy.targetLtvBps(), newLtv, "Target LTV should be updated");
+        assertEq(_targetLtvBps(), newLtv, "Target LTV should be updated");
     }
 
     function test_SetMaxSlippage_Success() public {
         uint16 newSlippage = 100; // 1%
 
         vm.prank(management);
-        strategy.setMaxSlippage(newSlippage);
+        (, uint16 performanceFeeBps_, uint16 maxLossBps_, , , ) = _baseConfig();
+        strategy.updateConfig(newSlippage, performanceFeeBps_, maxLossBps_);
 
-        assertEq(strategy.maxSlippageBps(), newSlippage, "Max slippage should be updated");
+        assertEq(_maxSlippageBps(), newSlippage, "Max slippage should be updated");
     }
 
     function test_SetDepositAndRedeemLimit_Success() public {
         uint128 newDepositLimit = 5_000_000 * 1e18;
         uint128 newRedeemLimitShares = 1_000_000 * 1e18;
 
-        vm.startPrank(management);
-        strategy.setDepositLimit(newDepositLimit);
-        strategy.setRedeemLimitShares(newRedeemLimitShares);
-        vm.stopPrank();
+        vm.prank(management);
+        strategy.setDepositWithdrawLimits(newDepositLimit, newRedeemLimitShares, 0);
 
-        assertEq(strategy.depositLimit(), newDepositLimit, "Deposit limit should be updated");
-        assertEq(strategy.redeemLimitShares(), newRedeemLimitShares, "redeem limit should be updated");
+        (uint128 depositLimit_, uint128 redeemLimitShares_, ) = _depositWithdrawLimits();
+        assertEq(depositLimit_, newDepositLimit, "Deposit limit should be updated");
+        assertEq(redeemLimitShares_, newRedeemLimitShares, "redeem limit should be updated");
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -1468,7 +1471,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
     function test_SetSwapper_TwoStepProcess() public {
         address newSwapper = address(0x456);
-        address oldSwapper = address(strategy.swapper());
+        address oldSwapper = _swapperAddress();
         bytes32 swapperKey = strategy.SWAPPER_KEY();
 
         // Step 1: Request swapper update
@@ -1478,7 +1481,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         strategy.requestUpdate(swapperKey, newSwapper);
 
         // Swapper should not be updated yet
-        assertEq(address(strategy.swapper()), oldSwapper, "Swapper should not be updated yet");
+        assertEq(_swapperAddress(), oldSwapper, "Swapper should not be updated yet");
 
         // Step 2: Wait for delay period and execute
         vm.warp(block.timestamp + strategy.DELAY() + 1);
@@ -1488,7 +1491,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         vm.prank(management);
         strategy.executeUpdate(swapperKey);
 
-        assertEq(address(strategy.swapper()), newSwapper, "Swapper should be updated");
+        assertEq(_swapperAddress(), newSwapper, "Swapper should be updated");
     }
 
     function test_CancelPendingOracleAdapter_Success() public {
@@ -1542,7 +1545,8 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function testRevert_SetMaxSlippage_InvalidValue() public {
         vm.prank(management);
         vm.expectRevert(LibError.InvalidValue.selector);
-        strategy.setMaxSlippage(10001); // > 100%
+        (, uint16 performanceFeeBps_, uint16 maxLossBps_, , , ) = _baseConfig();
+        strategy.updateConfig(10001, performanceFeeBps_, maxLossBps_); // > 100%
     }
 
     function testRevert_SetOracleAdapter_NotManagement() public {
@@ -1741,7 +1745,8 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
 
         // Set performance fee to 10%
         vm.prank(management);
-        strategy.setPerformanceFee(1_000);
+        (uint16 maxSlippageBps, , uint16 maxLossBps, , , ) = strategy.getBaseStrategyConfig();
+        strategy.updateConfig(maxSlippageBps, 1_000, maxLossBps);
 
         // Deposit into strategy
         _setupUserDeposit(user1, _amount);
@@ -1936,7 +1941,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
         (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
-        uint256 ppsBeforeReport = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
+        uint256 ppsBeforeReport = strategy.convertToAssets(ONE_SHARE_UNIT());
 
         // Simulate high collateral yield (15% APY) vs low debt interest (3% APY)
         _simulateCollateralPriceChange(1200); // net 12%
@@ -1945,7 +1950,7 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
         vm.prank(keeper);
         strategy.harvestAndReport();
 
-        uint256 ppsAfterReport = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
+        uint256 ppsAfterReport = strategy.convertToAssets(ONE_SHARE_UNIT());
         (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
 
         assertGt(netAssetsAfter, netAssetsBefore, "Net assets should increase");
@@ -1971,14 +1976,14 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_Profit_SharePriceIncreases() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        uint256 ppsBefore = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
+        uint256 ppsBefore = strategy.convertToAssets(ONE_SHARE_UNIT());
 
         _simulateCollateralPriceChange(2000); //20%
 
         vm.prank(keeper);
         strategy.harvestAndReport();
 
-        uint256 ppsAfter = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
+        uint256 ppsAfter = strategy.convertToAssets(ONE_SHARE_UNIT());
         assertGt(ppsAfter, ppsBefore, "Share price should increase");
     }
 
@@ -2040,14 +2045,14 @@ abstract contract LeveragedStrategyTest is LeveragedStrategyBaseSetup {
     function test_Loss_SharePriceDecreases() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        uint256 ppsBefore = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
+        uint256 ppsBefore = strategy.convertToAssets(ONE_SHARE_UNIT());
 
         _simulateCollateralPriceChange(-200); // 2%
 
         vm.prank(keeper);
         strategy.harvestAndReport();
 
-        uint256 ppsAfter = strategy.convertToAssets(strategy.ONE_SHARE_UNIT());
+        uint256 ppsAfter = strategy.convertToAssets(ONE_SHARE_UNIT());
 
         assertLt(ppsAfter, ppsBefore, "Share price should decrease after loss");
     }

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {console} from "forge-std/src/Test.sol";
+import {console} from "forge-std/Test.sol";
+import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import {IERC20} from "@openzeppelin-contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
@@ -204,17 +205,22 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
     function _deployStrategy() internal override {
         vm.startPrank(management);
 
-        address deployedStrategy = address(
-            new LeveragedEuler(
-                ASSET_TOKEN, // asset token
-                "Ceres Leveraged Euler Strategy", // name
-                "ceres-avUSD-USDC", // symbol
-                COLLATERAL_TOKEN, // collateral token
-                DEBT_TOKEN, // debt token
-                COLLATERAL_VAULT, // collateral vault
-                DEBT_VAULT, // borrow vault
-                address(evc), // vault connector
-                address(roleManager) // role manager
+        address deployedStrategy = Upgrades.deployTransparentProxy(
+            "LeveragedEuler.sol:LeveragedEuler",
+            management,
+            abi.encodeCall(
+                LeveragedEuler.initialize,
+                (
+                    ASSET_TOKEN,
+                    "Ceres Leveraged Euler Strategy",
+                    "ceres-avUSD-USDC",
+                    COLLATERAL_TOKEN,
+                    DEBT_TOKEN,
+                    COLLATERAL_VAULT,
+                    DEBT_VAULT,
+                    address(evc),
+                    address(roleManager)
+                )
             )
         );
         console.log("Strategy deployed at:", deployedStrategy);
@@ -251,9 +257,8 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
 
         // Set LTV parameters
         strategy.setTargetLtv(TARGET_LTV_BPS);
-        strategy.setMaxSlippage(MAX_SLIPPAGE_BPS);
-        strategy.setDepositLimit(DEPOSIT_LIMIT);
-        strategy.setRedeemLimitShares(REDEEM_LIMIT_SHARES);
+        strategy.updateConfig(MAX_SLIPPAGE_BPS, 15_00, 0);
+        strategy.setDepositWithdrawLimits(DEPOSIT_LIMIT, REDEEM_LIMIT_SHARES, 0);
 
         vm.stopPrank();
     }

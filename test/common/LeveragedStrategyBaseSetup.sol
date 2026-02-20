@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {Test, console, console2} from "forge-std/src/Test.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin-contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -75,6 +75,10 @@ abstract contract LeveragedStrategyBaseSetup is Test {
 
     function SMALL_DEPOSIT() internal view returns (uint256) {
         return 100 * 10 ** IERC20Metadata(address(assetToken)).decimals();
+    }
+
+    function ONE_SHARE_UNIT() internal view returns (uint256) {
+        return 10 ** IERC20Metadata(address(strategy)).decimals();
     }
 
     /**
@@ -235,7 +239,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         vm.prank(user);
         shares = strategy.deposit(depositAmount, user);
 
-        if (!strategy.IS_ASSET_COLLATERAL()) {
+        if (!_isAssetCollateral()) {
             // Need to swap and deposit the collateral first
             uint256 assetBalance = _balance(address(assetToken), address(strategy));
             _swapAssetsAndDepositCollateral(assetBalance);
@@ -333,7 +337,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
 
         uint256 targetDebt = LeverageLib.computeTargetDebt(
             netAssets - withdrawAmount,
-            strategy.targetLtvBps(),
+            _targetLtvBps(),
             strategy.oracleAdapter()
         );
 
@@ -550,7 +554,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     /// @notice Build default processCurrentRequest extra data when not provided
     /// @dev Supplies swap data for deleveraging and collateral->asset swaps
     function _buildProcessRequestData() internal returns (bytes memory extraData) {
-        if (strategy.IS_ASSET_COLLATERAL()) {
+        if (_isAssetCollateral()) {
             return "";
         }
 
@@ -573,7 +577,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         bytes memory collateralToAssetSwapData;
         if (amountToFree > 0) {
             uint256 collateralAmount = oracleAdapter.convertAssetsToCollateral(amountToFree);
-            collateralAmount += (collateralAmount * strategy.maxSlippageBps()) / BPS_PRECISION;
+            collateralAmount += (collateralAmount * _maxSlippageBps()) / BPS_PRECISION;
 
             collateralToAssetSwapData = _getKyberswapSwapData(
                 block.chainid,
@@ -596,5 +600,44 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         }
 
         extraData = abi.encode(flashLoanSwapData, collateralToAssetSwapData);
+    }
+
+    function _isAssetCollateral() internal view returns (bool) {
+        return strategy.asset() == address(strategy.COLLATERAL_TOKEN());
+    }
+
+    function _targetLtvBps() internal view returns (uint16 targetLtvBps_) {
+        (, targetLtvBps_, , , ) = strategy.getLeveragedStrategyConfig();
+    }
+
+    function _maxSlippageBps() internal view returns (uint16 maxSlippageBps_) {
+        (maxSlippageBps_, , , , , ) = strategy.getBaseStrategyConfig();
+    }
+
+    function _swapperAddress() internal view returns (address swapperAddress_) {
+        (, , , swapperAddress_, ) = strategy.getLeveragedStrategyConfig();
+    }
+
+    function _baseConfig()
+        internal
+        view
+        returns (
+            uint16 maxSlippageBps_,
+            uint16 performanceFeeBps_,
+            uint16 maxLossBps_,
+            uint48 lastReportTimestamp_,
+            address performanceFeeRecipient_,
+            address roleManager_
+        )
+    {
+        return strategy.getBaseStrategyConfig();
+    }
+
+    function _depositWithdrawLimits()
+        internal
+        view
+        returns (uint128 depositLimit_, uint128 redeemLimitShares_, uint128 minDepositAmount_)
+    {
+        return strategy.getDepositWithdrawLimits();
     }
 }
