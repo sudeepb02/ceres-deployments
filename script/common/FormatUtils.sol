@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {console2} from "forge-std/src/console2.sol";
-import {Vm} from "forge-std/src/Vm.sol";
+import {console2} from "forge-std/console2.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 /// @title FormatUtils
 /// @notice Simple helper library to format numbers with decimals for console logging

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {Script, console} from "forge-std/src/Script.sol";
+import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin-contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
@@ -48,8 +48,12 @@ abstract contract StrategyOperations is Script {
     function _getPeripheryContracts(
         LeveragedEuler strategy
     ) internal view returns (address swapper, address flashLoanRouter) {
-        swapper = address(strategy.swapper());
-        flashLoanRouter = address(strategy.flashLoanRouter());
+        (, , , swapper, flashLoanRouter) = strategy.getLeveragedStrategyConfig();
+    }
+
+    function _isAssetCollateral(LeveragedEuler strategy) internal view returns (bool) {
+        (address asset, address collateral, ) = _getTokens(strategy);
+        return asset == collateral;
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -62,7 +66,7 @@ abstract contract StrategyOperations is Script {
     function _depositIdleAssets(LeveragedEuler strategy) internal {
         (address asset, address collateral, ) = _getTokens(strategy);
 
-        if (strategy.IS_ASSET_COLLATERAL()) {
+        if (_isAssetCollateral(strategy)) {
             console.log("\nAsset is collateral - no swap needed before deposit");
             return;
         }
@@ -211,7 +215,7 @@ abstract contract StrategyOperations is Script {
 
         (uint256 netAssets, uint256 collateralAmount, uint256 debtAmount) = strategy.getNetAssets();
         uint256 ltv = strategy.getStrategyLtv();
-        uint256 targetLtv = strategy.targetLtvBps();
+        (, uint16 targetLtv, , , ) = strategy.getLeveragedStrategyConfig();
         uint256 withdrawalReserve = strategy.withdrawalReserve();
         uint256 currentRequestId = strategy.currentRequestId();
 
@@ -251,23 +255,20 @@ abstract contract StrategyOperations is Script {
 
         uint128 withdrawalReserve = strategy.withdrawalReserve();
         uint128 currentRequestId = strategy.currentRequestId();
-        uint128 depositLimit = strategy.depositLimit();
-        uint128 redeemLimitShares = strategy.redeemLimitShares();
-        uint128 snapshotPps = strategy.snapshotPricePerShare();
-        uint128 minDepositAmount = strategy.minDepositAmount();
-
-        uint16 maxSlippageBps = strategy.maxSlippageBps();
-        uint16 performanceFeeBps = strategy.performanceFeeBps();
-        uint16 maxLossBps = strategy.maxLossBps();
-        uint48 lastReportTimestamp = strategy.lastReportTimestamp();
-        address performanceFeeRecipient = strategy.performanceFeeRecipient();
+        (uint128 depositLimit, uint128 redeemLimitShares, uint128 minDepositAmount) = strategy.getDepositWithdrawLimits();
+        (
+            uint16 maxSlippageBps,
+            uint16 performanceFeeBps,
+            uint16 maxLossBps,
+            uint48 lastReportTimestamp,
+            address performanceFeeRecipient,
+        ) = strategy.getBaseStrategyConfig();
 
         console.log("\n--- Strategy Config ---");
         FormatUtils.logWithSymbol("Withdrawal Reserve:", withdrawalReserve, assetDecimals, "AssetTokens");
         console.log("Current Request ID:", currentRequestId);
         FormatUtils.logWithSymbol("Deposit Limit:     ", depositLimit, assetDecimals, "AssetTokens");
         FormatUtils.logWithSymbol("Redeem Limit (shares):", redeemLimitShares, decimals, "ShareTokens");
-        FormatUtils.logWithSymbol("Snapshot PPS:      ", snapshotPps, assetDecimals, "AssetTokens");
         FormatUtils.logWithSymbol("Min Deposit Amount:", minDepositAmount, assetDecimals, "AssetTokens");
 
         FormatUtils.logBps("Max Slippage Bps:       ", maxSlippageBps);
@@ -318,7 +319,7 @@ abstract contract StrategyOperations is Script {
         (address asset, address collateral, address debt) = _getTokens(strategy);
 
         // If asset is collateral, no swaps needed
-        if (strategy.IS_ASSET_COLLATERAL()) {
+        if (_isAssetCollateral(strategy)) {
             console.log("\nAsset is collateral - no swaps needed");
             return "";
         }
@@ -351,13 +352,21 @@ abstract contract StrategyOperations is Script {
 
         // Build collateral -> asset swap data if needed
         if (amountToFree > 0) {
+            uint256 amountInCollateral = strategy.oracleAdapter().convertAssetsToCollateral(amountToFree);
+            FormatUtils.logWithSymbol(
+                "\nAmount to free in collateral:",
+                amountInCollateral,
+                IERC20Metadata(collateral).decimals(),
+                "Collateral Tokens"
+            );
+
             console.log("\nFetching collateral -> asset swap data...");
             collateralToAssetSwapData = _getSwapData(
                 strategy,
                 collateral,
                 asset,
-                amountToFree,
-                false // Use exactIn for collateral -> asset (Kyberswap)
+                amountInCollateral,
+                false // leverageDown
             );
         }
 
@@ -373,8 +382,17 @@ abstract contract StrategyOperations is Script {
         // Build flash loan swap data if rebalancing is needed
         bytes memory flashLoanSwapData = "";
         if (rebalanceAmount > 0) {
+            uint256 rebalanceAmountInCollateral = strategy.oracleAdapter().convertDebtToCollateral(rebalanceAmount);
+            FormatUtils.logWithSymbol(
+                "Rebalance amount in collateral:",
+                rebalanceAmountInCollateral,
+                IERC20Metadata(collateral).decimals(),
+                "Collateral Tokens"
+            );
+
+            // Use exactIn for collateral -> asset (Kyberswap)
             console.log("\nFetching deleverage swap data (collateral -> debt)...");
-            flashLoanSwapData = _getSwapData(strategy, collateral, debt, rebalanceAmount, false);
+            flashLoanSwapData = _getSwapData(strategy, collateral, debt, rebalanceAmountInCollateral, false);
         }
 
         // Encode extraData
@@ -414,11 +432,8 @@ abstract contract StrategyOperations is Script {
         }
 
         // Calculate target debt after withdrawal
-        uint256 targetDebt = LeverageLib.computeTargetDebt(
-            netAssets - withdrawAmount,
-            strategy.targetLtvBps(),
-            strategy.oracleAdapter()
-        );
+        (, uint16 targetLtvBps, , , ) = strategy.getLeveragedStrategyConfig();
+        uint256 targetDebt = LeverageLib.computeTargetDebt(netAssets - withdrawAmount, targetLtvBps, strategy.oracleAdapter());
 
         FormatUtils.logWithSymbol("Target debt after withdrawal:", targetDebt, debtDecimals, "DebtTokens");
 

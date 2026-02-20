@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {console} from "forge-std/src/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin-contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
@@ -61,7 +61,7 @@ contract RebalanceLeverageDown is StrategyOperations {
         uint256 deleverageAmountInCollateral;
         {
             uint256 targetDebt;
-            uint16 targetLtvBps = strategy.targetLtvBps();
+            (, uint16 targetLtvBps, , , ) = strategy.getLeveragedStrategyConfig();
 
             (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
 

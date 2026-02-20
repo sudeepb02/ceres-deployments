@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {Script, console} from "forge-std/src/Script.sol";
+import {Script, console} from "forge-std/Script.sol";
 import {CeresSwapper} from "ceres-strategies/src/periphery/CeresSwapper.sol";
 import {DeploymentConstants} from "../common/DeploymentConstants.sol";
 

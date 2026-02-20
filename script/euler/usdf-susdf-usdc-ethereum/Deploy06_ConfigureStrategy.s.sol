@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {Script, console} from "forge-std/src/Script.sol";
+import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin-contracts/token/ERC20/IERC20.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {CeresSwapper} from "ceres-strategies/src/periphery/CeresSwapper.sol";
@@ -22,6 +22,7 @@ contract Deploy06_ConfigureStrategy is Script, DeploymentConstantsUsdfEthereum {
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     bool constant VERIFY_CONTRACT = false; // No new contracts deployed in this script
+    uint16 constant PERFORMANCE_FEE_BPS = 15_00;
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   MAIN CONFIGURATION                                     //
@@ -164,27 +165,22 @@ contract Deploy06_ConfigureStrategy is Script, DeploymentConstantsUsdfEthereum {
 
     function _setStrategyParameters(LeveragedEuler strategy, address feeReceiver) internal {
         // Set fee recipient
-        // strategy.setPerformanceFeeRecipient(feeReceiver);
-        // console.log("  Performance fee recipient:", feeReceiver);
+        strategy.setPerformanceFeeRecipient(feeReceiver);
+        console.log("  Performance fee recipient:", feeReceiver);
 
-        // Set max loss
-        strategy.setMaxLoss(MAX_LOSS_BPS);
+        // Set base config
+        strategy.updateConfig(MAX_SLIPPAGE_BPS, PERFORMANCE_FEE_BPS, MAX_LOSS_BPS);
+        console.log("  Max slippage:", MAX_SLIPPAGE_BPS, "bps");
+        console.log("  Performance fee:", PERFORMANCE_FEE_BPS, "bps");
         console.log("  Max loss:", MAX_LOSS_BPS, "bps");
 
         // Set target LTV
-        // strategy.setTargetLtv(TARGET_LTV_BPS);
-        // console.log("  Target LTV:", TARGET_LTV_BPS, "bps");
+        strategy.setTargetLtv(TARGET_LTV_BPS);
+        console.log("  Target LTV:", TARGET_LTV_BPS, "bps");
 
-        // Set max slippage
-        strategy.setMaxSlippage(MAX_SLIPPAGE_BPS);
-        console.log("  Max slippage:", MAX_SLIPPAGE_BPS, "bps");
-
-        // Set deposit limit
-        strategy.setDepositLimit(DEPOSIT_LIMIT);
+        // Set deposit/redeem limits
+        strategy.setDepositWithdrawLimits(DEPOSIT_LIMIT, REDEEM_LIMIT_SHARES, 0);
         console.log("  Deposit limit:", DEPOSIT_LIMIT);
-
-        // Set redeem limit
-        strategy.setRedeemLimitShares(REDEEM_LIMIT_SHARES);
         console.log("  Redeem limit shares:", REDEEM_LIMIT_SHARES);
     }
 

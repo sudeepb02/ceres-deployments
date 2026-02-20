@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {console} from "forge-std/src/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {ICeresBaseStrategy} from "ceres-strategies/src/interfaces/strategies/ICeresBaseStrategy.sol";
 import {StrategyOperations} from "./StrategyOperations.sol";
@@ -44,8 +44,8 @@ contract ProcessRedeemRequest is StrategyOperations {
             return;
         }
 
-        (uint128 totalShares, uint128 pps) = strategy.requestDetails(currentRequestId);
-
+        uint128 totalShares = strategy.requestDetails(currentRequestId).totalShares;
+        uint128 pps = strategy.requestDetails(currentRequestId).pricePerShare;
         ICeresBaseStrategy.RequestDetails memory request = ICeresBaseStrategy.RequestDetails({
             totalShares: totalShares,
             pricePerShare: pps
@@ -73,6 +73,15 @@ contract ProcessRedeemRequest is StrategyOperations {
         vm.stopBroadcast();
 
         console.log("\nRequest processed successfully");
+
+        uint128 processedTotalShares = strategy.requestDetails(currentRequestId - 1).totalShares;
+        uint128 processedPps = strategy.requestDetails(currentRequestId - 1).pricePerShare;
+        ICeresBaseStrategy.RequestDetails memory processedRequest = ICeresBaseStrategy.RequestDetails({
+            totalShares: processedTotalShares,
+            pricePerShare: processedPps
+        });
+        console.log("Total shares processed", processedRequest.totalShares);
+        console.log("Price per share at processing", processedRequest.pricePerShare);
 
         // Log strategy state after processing
         console.log("\n--- Strategy State AFTER Processing ---");

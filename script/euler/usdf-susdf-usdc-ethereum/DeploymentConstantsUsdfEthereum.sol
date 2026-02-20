@@ -85,5 +85,7 @@ abstract contract DeploymentConstantsUsdfEthereum is DeploymentConstants {
 
     // Strategy-specific deployed contracts (update after deployment)
     address internal constant EULER_ORACLE_ADAPTER_ADDRESS = 0x7BD5628E3E452bD21B83E20bcdC25F00CbB68BC7;
-    address internal constant LEVERAGED_EULER_STRATEGY_ADDRESS = 0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3;
+
+    address internal constant LEVERAGED_EULER_STRATEGY_ADDRESS_OLD = 0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3;
+    address internal constant LEVERAGED_EULER_STRATEGY_ADDRESS = address(0);
 }

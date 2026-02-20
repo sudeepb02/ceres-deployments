@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {Script, console} from "forge-std/src/Script.sol";
+import {Script, console} from "forge-std/Script.sol";
+import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {DeploymentConstantsUsdfEthereum} from "./DeploymentConstantsUsdfEthereum.sol";
 
@@ -50,19 +51,31 @@ contract Deploy05_LeveragedEulerStrategy is Script, DeploymentConstantsUsdfEther
 
         // Deploy
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployerAddress = vm.addr(deployerPrivateKey);
+        console.log("\nDeployer Address:", deployerAddress);
+
         vm.startBroadcast(deployerPrivateKey);
 
-        LeveragedEuler strategy = new LeveragedEuler(
-            ASSET_TOKEN,
-            STRATEGY_NAME,
-            STRATEGY_SYMBOL,
-            COLLATERAL_TOKEN,
-            DEBT_TOKEN,
-            COLLATERAL_VAULT,
-            DEBT_VAULT,
-            EVC,
-            ROLE_MANAGER_ADDRESS
+        address proxy = Upgrades.deployTransparentProxy(
+            "LeveragedEuler.sol:LeveragedEuler",
+            deployerAddress,
+            abi.encodeCall(
+                LeveragedEuler.initialize,
+                (
+                    ASSET_TOKEN,
+                    STRATEGY_NAME,
+                    STRATEGY_SYMBOL,
+                    COLLATERAL_TOKEN,
+                    DEBT_TOKEN,
+                    COLLATERAL_VAULT,
+                    DEBT_VAULT,
+                    EVC,
+                    ROLE_MANAGER_ADDRESS
+                )
+            )
         );
+
+        LeveragedEuler strategy = LeveragedEuler(proxy);
 
         console.log("\nLeveragedEuler Strategy deployed at:", address(strategy));
 

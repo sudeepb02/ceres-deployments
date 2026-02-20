@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
-import {console} from "forge-std/src/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
 import {StrategyOperations} from "./StrategyOperations.sol";
 import {FormatUtils} from "../common/FormatUtils.sol";
