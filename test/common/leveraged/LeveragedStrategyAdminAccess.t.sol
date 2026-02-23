@@ -42,8 +42,8 @@ abstract contract LeveragedStrategyAdminAccess is LeveragedStrategySharedBase {
     function testRevert_Admin_Slippage_Exceeded() public {
         _setupUserDeposit(user1, DEFAULT_DEPOSIT());
 
-        vm.prank(management);
         (, uint16 performanceFeeBps_, uint16 maxLossBps_, , , ) = _baseConfig();
+        vm.prank(management);
         strategy.updateConfig(0, performanceFeeBps_, maxLossBps_);
 
         uint256 debtAmount = LeverageLib.computeTargetDebt(DEFAULT_DEPOSIT(), TARGET_LTV_BPS, strategy.oracleAdapter());
@@ -123,14 +123,13 @@ abstract contract LeveragedStrategyAdminAccess is LeveragedStrategySharedBase {
     function test_Admin_SetOracleAdapter_TwoStepProcess() public {
         address newAdapter = address(0x123);
         address oldAdapter = address(strategy.oracleAdapter());
-        bytes32 oracleKey = strategy.ORACLE_KEY();
 
         vm.expectEmit(true, true, false, true);
-        emit ILeveragedStrategy.UpdateRequested(oracleKey, newAdapter, block.timestamp + strategy.DELAY());
+        emit ILeveragedStrategy.UpdateRequested(ORACLE_KEY, newAdapter, block.timestamp + strategy.DELAY());
         vm.prank(management);
-        strategy.requestUpdate(oracleKey, newAdapter);
+        strategy.requestUpdate(ORACLE_KEY, newAdapter);
 
-        (address proposedAddress, uint64 readyTimestamp) = strategy.pendingUpdates(oracleKey);
+        (address proposedAddress, uint64 readyTimestamp) = strategy.pendingUpdates(ORACLE_KEY);
         assertEq(proposedAddress, newAdapter, "Proposed oracle adapter should be set");
         assertEq(readyTimestamp, block.timestamp + strategy.DELAY(), "Ready timestamp should be set");
 
@@ -139,9 +138,9 @@ abstract contract LeveragedStrategyAdminAccess is LeveragedStrategySharedBase {
         vm.warp(block.timestamp + strategy.DELAY() + 1);
 
         vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.UpdateExecuted(oracleKey, oldAdapter, newAdapter);
+        emit ILeveragedStrategy.UpdateExecuted(ORACLE_KEY, oldAdapter, newAdapter);
         vm.prank(management);
-        strategy.executeUpdate(oracleKey);
+        strategy.executeUpdate(ORACLE_KEY);
 
         assertEq(address(strategy.oracleAdapter()), newAdapter, "Oracle adapter should be updated");
     }
@@ -149,54 +148,51 @@ abstract contract LeveragedStrategyAdminAccess is LeveragedStrategySharedBase {
     function test_Admin_SetSwapper_TwoStepProcess() public {
         address newSwapper = address(0x456);
         address oldSwapper = _swapperAddress();
-        bytes32 swapperKey = strategy.SWAPPER_KEY();
 
         vm.expectEmit(true, true, false, true);
-        emit ILeveragedStrategy.UpdateRequested(swapperKey, newSwapper, block.timestamp + strategy.DELAY());
+        emit ILeveragedStrategy.UpdateRequested(SWAPPER_KEY, newSwapper, block.timestamp + strategy.DELAY());
         vm.prank(management);
-        strategy.requestUpdate(swapperKey, newSwapper);
+        strategy.requestUpdate(SWAPPER_KEY, newSwapper);
 
         assertEq(_swapperAddress(), oldSwapper, "Swapper should not be updated yet");
 
         vm.warp(block.timestamp + strategy.DELAY() + 1);
 
         vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.UpdateExecuted(swapperKey, oldSwapper, newSwapper);
+        emit ILeveragedStrategy.UpdateExecuted(SWAPPER_KEY, oldSwapper, newSwapper);
         vm.prank(management);
-        strategy.executeUpdate(swapperKey);
+        strategy.executeUpdate(SWAPPER_KEY);
 
         assertEq(_swapperAddress(), newSwapper, "Swapper should be updated");
     }
 
     function test_Admin_CancelPendingOracleAdapter_Success() public {
         address newAdapter = address(0x123);
-        bytes32 oracleKey = strategy.ORACLE_KEY();
 
         vm.prank(management);
-        strategy.requestUpdate(oracleKey, newAdapter);
+        strategy.requestUpdate(ORACLE_KEY, newAdapter);
 
         vm.prank(management);
         vm.expectEmit(true, true, false, true);
-        emit ILeveragedStrategy.UpdateCancelled(oracleKey, newAdapter);
-        strategy.cancelUpdate(oracleKey);
+        emit ILeveragedStrategy.UpdateCancelled(ORACLE_KEY, newAdapter);
+        strategy.cancelUpdate(ORACLE_KEY);
 
-        (address proposedAddress, ) = strategy.pendingUpdates(oracleKey);
+        (address proposedAddress, ) = strategy.pendingUpdates(ORACLE_KEY);
         assertEq(proposedAddress, address(0), "Proposed oracle adapter should be cleared");
     }
 
     function test_Admin_CancelPendingSwapper_Success() public {
         address newSwapper = address(0x456);
-        bytes32 swapperKey = strategy.SWAPPER_KEY();
 
         vm.prank(management);
-        strategy.requestUpdate(swapperKey, newSwapper);
+        strategy.requestUpdate(SWAPPER_KEY, newSwapper);
 
         vm.prank(management);
         vm.expectEmit(true, true, false, true);
-        emit ILeveragedStrategy.UpdateCancelled(swapperKey, newSwapper);
-        strategy.cancelUpdate(swapperKey);
+        emit ILeveragedStrategy.UpdateCancelled(SWAPPER_KEY, newSwapper);
+        strategy.cancelUpdate(SWAPPER_KEY);
 
-        (address proposedAddress, ) = strategy.pendingUpdates(swapperKey);
+        (address proposedAddress, ) = strategy.pendingUpdates(SWAPPER_KEY);
         assertEq(proposedAddress, address(0), "Proposed swapper should be cleared");
     }
 
@@ -213,94 +209,95 @@ abstract contract LeveragedStrategyAdminAccess is LeveragedStrategySharedBase {
     }
 
     function testRevert_Admin_SetMaxSlippage_InvalidValue() public {
+        (, uint16 performanceFeeBps_, uint16 maxLossBps_, , , ) = _baseConfig();
+
         vm.prank(management);
         vm.expectRevert(LibError.InvalidValue.selector);
-        (, uint16 performanceFeeBps_, uint16 maxLossBps_, , , ) = _baseConfig();
         strategy.updateConfig(10001, performanceFeeBps_, maxLossBps_);
     }
 
     function testRevert_Admin_SetOracleAdapter_NotManagement() public {
         vm.prank(user1);
         vm.expectRevert();
-        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0x123));
+        strategy.requestUpdate(ORACLE_KEY, address(0x123));
     }
 
     function testRevert_Admin_SetSwapper_NotManagement() public {
         vm.prank(user1);
         vm.expectRevert();
-        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0x456));
+        strategy.requestUpdate(SWAPPER_KEY, address(0x456));
     }
 
     function testRevert_Admin_RequestOracleAdapterUpdate_ZeroAddress() public {
         vm.prank(management);
         vm.expectRevert(LibError.InvalidAddress.selector);
-        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0));
+        strategy.requestUpdate(ORACLE_KEY, address(0));
     }
 
     function testRevert_Admin_RequestSwapperUpdate_ZeroAddress() public {
         vm.prank(management);
         vm.expectRevert(LibError.InvalidAddress.selector);
-        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0));
+        strategy.requestUpdate(SWAPPER_KEY, address(0));
     }
 
     function testRevert_Admin_ExecuteOracleAdapterUpdate_BeforeDelay() public {
         vm.prank(management);
-        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0x123));
+        strategy.requestUpdate(ORACLE_KEY, address(0x123));
 
         vm.prank(management);
         vm.expectRevert(LibError.NotReady.selector);
-        strategy.executeUpdate(strategy.ORACLE_KEY());
+        strategy.executeUpdate(ORACLE_KEY);
     }
 
     function testRevert_Admin_ExecuteSwapperUpdate_BeforeDelay() public {
         vm.prank(management);
-        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0x456));
+        strategy.requestUpdate(SWAPPER_KEY, address(0x456));
 
         vm.prank(management);
         vm.expectRevert(LibError.NotReady.selector);
-        strategy.executeUpdate(strategy.SWAPPER_KEY());
+        strategy.executeUpdate(SWAPPER_KEY);
     }
 
     function testRevert_Admin_RequestOracleAdapterUpdate_PendingExists() public {
         vm.prank(management);
-        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0x123));
+        strategy.requestUpdate(ORACLE_KEY, address(0x123));
 
         vm.prank(management);
         vm.expectRevert(LibError.PendingActionExists.selector);
-        strategy.requestUpdate(strategy.ORACLE_KEY(), address(0x789));
+        strategy.requestUpdate(ORACLE_KEY, address(0x789));
     }
 
     function testRevert_Admin_RequestSwapperUpdate_PendingExists() public {
         vm.prank(management);
-        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0x456));
+        strategy.requestUpdate(SWAPPER_KEY, address(0x456));
 
         vm.prank(management);
         vm.expectRevert(LibError.PendingActionExists.selector);
-        strategy.requestUpdate(strategy.SWAPPER_KEY(), address(0x789));
+        strategy.requestUpdate(SWAPPER_KEY, address(0x789));
     }
 
     function testRevert_Admin_ExecuteOracleAdapterUpdate_NoPending() public {
         vm.prank(management);
         vm.expectRevert(LibError.NoPendingActionExists.selector);
-        strategy.executeUpdate(strategy.ORACLE_KEY());
+        strategy.executeUpdate(ORACLE_KEY);
     }
 
     function testRevert_Admin_ExecuteSwapperUpdate_NoPending() public {
         vm.prank(management);
         vm.expectRevert(LibError.NoPendingActionExists.selector);
-        strategy.executeUpdate(strategy.SWAPPER_KEY());
+        strategy.executeUpdate(SWAPPER_KEY);
     }
 
     function testRevert_Admin_CancelPendingOracleAdapter_NoPending() public {
         vm.prank(management);
         vm.expectRevert(LibError.NoPendingActionExists.selector);
-        strategy.cancelUpdate(strategy.ORACLE_KEY());
+        strategy.cancelUpdate(ORACLE_KEY);
     }
 
     function testRevert_Admin_CancelPendingSwapper_NoPending() public {
         vm.prank(management);
         vm.expectRevert(LibError.NoPendingActionExists.selector);
-        strategy.cancelUpdate(strategy.SWAPPER_KEY());
+        strategy.cancelUpdate(SWAPPER_KEY);
     }
 
     function testRevert_Admin_RescueTokens_StrategyTokens() public {

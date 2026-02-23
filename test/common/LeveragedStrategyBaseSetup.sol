@@ -43,6 +43,11 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
     bytes32 public constant MANAGEMENT_ROLE = keccak256("MANAGEMENT_ROLE");
 
+    // Keys for pending updates mapping
+    bytes32 public constant ORACLE_KEY = keccak256("ORACLE");
+    bytes32 public constant SWAPPER_KEY = keccak256("SWAPPER");
+    bytes32 public constant FLASH_LOAN_ROUTER_KEY = keccak256("FLASH_LOAN_ROUTER");
+
     // Common contract addresses
     // Kyberswap
     address public constant KYBER_SCALE_HELPER_AVAX = 0x2f577A41BeC1BE1152AeEA12e73b7391d15f655D;
