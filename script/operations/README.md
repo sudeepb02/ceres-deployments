@@ -55,7 +55,7 @@ Updates the target LTV (Loan-to-Value) ratio for the strategy.
 **Usage:**
 
 ```bash
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 NEW_TARGET_LTV=8300 \
 forge script script/common/operations/UpdateTargetLtv.s.sol \
     --rpc-url $RPC_URL \
@@ -76,7 +76,7 @@ Harvests rewards from the yield protocol and reports performance to the vault.
 **Usage:**
 
 ```bash
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 forge script script/common/operations/HarvestAndReport.s.sol \
     --rpc-url $RPC_URL \
     --broadcast
@@ -96,7 +96,7 @@ Swaps idle asset tokens to collateral and deposits them into the vault.
 **Usage:**
 
 ```bash
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 forge script script/common/operations/SwapAndDepositIdleAssets.s.sol \
     --rpc-url $RPC_URL \
     --broadcast
@@ -120,13 +120,13 @@ Processes pending async withdrawal requests by deleveraging and freeing assets.
 **Usage:**
 
 ```bash
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 forge script script/common/operations/ProcessRedeemRequest.s.sol \
     --rpc-url $RPC_URL \
     --broadcast
 
 # With exactOut swaps (if Paraswap supports it)
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 EXACT_OUT_AVAILABLE=true \
 forge script script/common/operations/ProcessRedeemRequest.s.sol \
     --rpc-url $RPC_URL \
@@ -153,13 +153,13 @@ Increases leverage by borrowing more debt and swapping to collateral.
 
 ```bash
 # With flash loan (recommended)
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 forge script script/common/operations/RebalanceLeverageUp.s.sol \
     --rpc-url $RPC_URL \
     --broadcast
 
 # Without flash loan (keeper must have debt tokens)
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 USE_FLASH_LOAN=false \
 forge script script/common/operations/RebalanceLeverageUp.s.sol \
     --rpc-url $RPC_URL \
@@ -188,13 +188,13 @@ Decreases leverage by selling collateral to repay debt.
 
 ```bash
 # Deleverage to current target LTV
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 forge script script/common/operations/RebalanceLeverageDown.s.sol \
     --rpc-url $RPC_URL \
     --broadcast
 
 # Update target LTV and deleverage in one transaction
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 NEW_TARGET_LTV=5000 \
 forge script script/common/operations/RebalanceLeverageDown.s.sol \
     --rpc-url $RPC_URL \
@@ -222,7 +222,7 @@ Updates the flash loan provider configuration for the strategy.
 
 ```bash
 # Update to Silo USDC flash loan provider (ERC3156)
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 FLASH_LOAN_PROVIDER=0x90957Ad08D1EC15D4CCf5461444fFb0dC499EB2D \
 FLASH_LOAN_SOURCE=0 \
 forge script script/common/operations/FlashLoanProviderUpdate.s.sol \
@@ -230,7 +230,7 @@ forge script script/common/operations/FlashLoanProviderUpdate.s.sol \
     --broadcast
 
 # Disable flash loans
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 FLASH_LOAN_PROVIDER=0x90957Ad08D1EC15D4CCf5461444fFb0dC499EB2D \
 FLASH_LOAN_SOURCE=0 \
 FLASH_LOAN_ENABLED=false \
@@ -290,7 +290,7 @@ forge script script/euler/usdf-susdf-usdc-ethereum/customActions/UpdateTargetLtv
 **After:**
 
 ```bash
-STRATEGY_ADDRESS=0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3 \
+STRATEGY_ADDRESS=0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E \
 NEW_TARGET_LTV=8300 \
 forge script script/common/operations/UpdateTargetLtv.s.sol \
     --rpc-url $RPC_URL --broadcast

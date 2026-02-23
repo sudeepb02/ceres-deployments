@@ -53,7 +53,7 @@ contract Deploy06_ConfigureStrategy is Script, DeploymentConstantsUsdfEthereum {
 
         // Step 1: Configure swap providers
         console.log("\n1. Configuring swap providers...");
-        _configureSwapProviders(swapper);
+        // _configureSwapProviders(swapper);
 
         // Step 2: Configure flash loan routing
         console.log("\n2. Configuring flash loan routing...");

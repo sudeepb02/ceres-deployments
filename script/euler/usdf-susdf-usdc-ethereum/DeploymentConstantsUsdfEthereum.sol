@@ -67,11 +67,11 @@ abstract contract DeploymentConstantsUsdfEthereum is DeploymentConstants {
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // Strategy metadata
-    string internal constant STRATEGY_NAME = "Ceres Leveraged Euler Strategy";
+    string internal constant STRATEGY_NAME = "Ceres USDf Leveraged Euler Strategy";
     string internal constant STRATEGY_SYMBOL = "ceres-USDf-LeveragedEuler";
 
     // LTV parameters
-    uint16 internal constant TARGET_LTV_BPS = 7000; // 70%
+    uint16 internal constant TARGET_LTV_BPS = 8572; // 70%
     uint16 internal constant MAX_SLIPPAGE_BPS = 25; // 0.25%
     uint16 internal constant MAX_LOSS_BPS = 200; // 2%
 
@@ -87,5 +87,5 @@ abstract contract DeploymentConstantsUsdfEthereum is DeploymentConstants {
     address internal constant EULER_ORACLE_ADAPTER_ADDRESS = 0x7BD5628E3E452bD21B83E20bcdC25F00CbB68BC7;
 
     address internal constant LEVERAGED_EULER_STRATEGY_ADDRESS_OLD = 0xc36376C13B7Fba83359d4C8bafF7868eDca65EE3;
-    address internal constant LEVERAGED_EULER_STRATEGY_ADDRESS = address(0);
+    address internal constant LEVERAGED_EULER_STRATEGY_ADDRESS = 0x6b6341D8eF10adeB87f2aa193207F6053CD87C5E;
 }
