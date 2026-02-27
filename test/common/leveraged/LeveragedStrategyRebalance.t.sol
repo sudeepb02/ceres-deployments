@@ -14,11 +14,11 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
 
         _setupUserDeposit(user1, depositAmount);
 
-        (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, uint256 marketCollateral, , uint256 marketDebt, ) = strategy.getNetAssets();
 
-        assertEq(totalDebt, 0, "Debt should be zero before leverage");
+        assertEq(marketDebt, 0, "Debt should be zero before leverage");
         _assertApproxEqBps(netAssets, depositAmount, 10, "Net assets should be approx equal to deposit");
-        _assertApproxEqBps(totalCollateral, depositAmountInCollateral, 10, "Collateral should equal deposit");
+        _assertApproxEqBps(marketCollateral, depositAmountInCollateral, 10, "Collateral should equal deposit");
     }
 
     function test_Rebalance_GetNetAssets_AfterLeverage() public {
@@ -40,11 +40,11 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
         vm.prank(keeper);
         strategy.rebalance(debtAmount, true, swapData);
 
-        (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, uint256 marketCollateral, , uint256 marketDebt, ) = strategy.getNetAssets();
 
-        assertGt(totalCollateral, depositAmountInCollateral, "Collateral should increase from leverage");
+        assertGt(marketCollateral, depositAmountInCollateral, "Collateral should increase from leverage");
         _assertApproxEqBps(netAssets, depositAmount, 10, "Net assets should be ~deposit");
-        _assertApproxEqBps(totalDebt, debtAmount, 10, "Debt should be non-zero after leverage");
+        _assertApproxEqBps(marketDebt, debtAmount, 10, "Debt should be non-zero after leverage");
     }
 
     function test_Rebalance_LeverageUp() public {
@@ -76,7 +76,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
     function test_Rebalance_LeverageDown() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (, , uint256 debtBefore) = strategy.getNetAssets();
+        (, , , , uint256 debtBefore, ) = strategy.getNetAssets();
         uint256 deleverageAmount = debtBefore / 2;
 
         _mintAndApprove(address(debtToken), keeper, address(strategy), deleverageAmount);
@@ -92,7 +92,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
         vm.prank(keeper);
         strategy.rebalance(deleverageAmount, false, swapData);
 
-        (, , uint256 debtAfter) = strategy.getNetAssets();
+        (, , , , uint256 debtAfter, ) = strategy.getNetAssets();
 
         assertLt(debtAfter, debtBefore, "Debt should decrease");
     }
@@ -136,8 +136,8 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
         vm.prank(keeper);
         strategy.rebalance(1000 * 1e6, false, swapData);
 
-        (, , uint256 totalDebt) = strategy.getNetAssets();
-        assertEq(totalDebt, 0, "Debt should still be zero");
+        (, , , , uint256 marketDebt, ) = strategy.getNetAssets();
+        assertEq(marketDebt, 0, "Debt should still be zero");
         assertEq(keeperBalance, debtToken.balanceOf(keeper), "keeper balance should be the same");
     }
 
@@ -183,16 +183,16 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
     function test_Rebalance_UsingFlashLoan_LeverageDown() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (uint256 netAssets, uint256 totalCollateral, uint256 debt) = strategy.getNetAssets();
-        uint256 deleverageAmount = debt / 2;
+        (, uint256 netAssets, uint256 marketCollateral, , uint256 marketDebt, ) = strategy.getNetAssets();
+        uint256 deleverageAmount = marketDebt / 2;
 
         console.log("netAssets before", netAssets);
-        console.log("totalCollateral before", totalCollateral);
-        console.log("debt before", debt);
+        console.log("marketCollateral before", marketCollateral);
+        console.log("marketDebt before", marketDebt);
         console.log("deleverageAmount", deleverageAmount);
 
         bytes memory swapData;
-        (bool isExactOutSwapEnabled, , , , ) = strategy.getLeveragedStrategyConfig();
+        (bool isExactOutSwapEnabled, , , , , ) = strategy.getLeveragedStrategyConfig();
         if (isExactOutSwapEnabled) {
             swapData = _getParaswapSwapData(
                 CHAIN_ID,
@@ -209,11 +209,11 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
         strategy.rebalanceUsingFlashLoan(deleverageAmount, false, swapData);
 
         uint256 debtAfter;
-        (netAssets, totalCollateral, debtAfter) = strategy.getNetAssets();
+        (, netAssets, marketCollateral, , debtAfter, ) = strategy.getNetAssets();
         console.log("netAssets after", netAssets);
-        console.log("totalCollateral after", totalCollateral);
-        console.log("debt after", debtAfter);
-        assertLt(debtAfter, debt, "Debt should decrease");
+        console.log("marketCollateral after", marketCollateral);
+        console.log("marketDebt after", debtAfter);
+        assertLt(debtAfter, marketDebt, "Debt should decrease");
     }
 
     function test_Rebalance_UsingFlashLoan_EmitsEvent() public {

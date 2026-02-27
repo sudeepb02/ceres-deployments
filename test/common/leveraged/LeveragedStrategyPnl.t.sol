@@ -9,11 +9,11 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
     function test_Pnl_Profit_CollateralPriceIncrease() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, , , , ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(1000);
 
-        (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, , , , ) = strategy.getNetAssets();
 
         assertGt(netAssetsAfter, netAssetsBefore, "Net assets should increase with price");
     }
@@ -52,11 +52,11 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
     function test_Pnl_Loss_CollateralPriceDecrease() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, , , , ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(-1000);
 
-        (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, , , , ) = strategy.getNetAssets();
 
         assertLt(netAssetsAfter, netAssetsBefore, "Net assets should decrease with price drop");
     }
@@ -64,11 +64,11 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
     function test_Pnl_Loss_LeveragedLossesAmplified() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, , , , ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(-1000);
 
-        (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, , , , ) = strategy.getNetAssets();
 
         uint256 lossPercent = ((netAssetsBefore - netAssetsAfter) * 100) / netAssetsBefore;
 
@@ -85,7 +85,7 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
 
         assertGt(currentLtv, TARGET_LTV_BPS, "LTV should increase after price drop");
 
-        (uint256 netAssets, , ) = strategy.getNetAssets();
+        (, uint256 netAssets, , , , ) = strategy.getNetAssets();
         assertGt(netAssets, 0, "Should still have positive net assets");
     }
 
@@ -94,25 +94,25 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
 
         _simulateCollateralPriceChange(-1200);
 
-        (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, uint256 marketCollateral, , uint256 marketDebt, ) = strategy.getNetAssets();
 
-        uint256 collateralValue = oracleAdapter.convertCollateralToDebt(totalCollateral);
+        uint256 collateralValue = oracleAdapter.convertCollateralToDebt(marketCollateral);
 
         assertGt(netAssets, 0, "Net assets should be positive");
-        assertGt(collateralValue, totalDebt, "Collateral value should exceed debt");
+        assertGt(collateralValue, marketDebt, "Collateral value should exceed debt");
     }
 
     function test_Pnl_EdgeCase_OraclePriceVolatility() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
         _simulateCollateralPriceChange(500);
-        (uint256 netAssets1, , ) = strategy.getNetAssets();
+        (, uint256 netAssets1, , , , ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(-800);
-        (uint256 netAssets2, , ) = strategy.getNetAssets();
+        (, uint256 netAssets2, , , , ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(300);
-        (uint256 netAssets3, , ) = strategy.getNetAssets();
+        (, uint256 netAssets3, , , , ) = strategy.getNetAssets();
 
         assertGt(netAssets1, 0, "Should have positive assets after +5%");
         assertGt(netAssets2, 0, "Should have positive assets after -8%");
@@ -171,7 +171,7 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
         uint256 deposit2 = DEFAULT_DEPOSIT();
         _setupUserDeposit(user2, deposit2);
 
-        (uint256 netAssets, , uint256 currentDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, , , uint256 currentDebt, ) = strategy.getNetAssets();
         uint256 newTargetDebt = LeverageLib.computeTargetDebt(netAssets, TARGET_LTV_BPS, strategy.oracleAdapter());
         if (newTargetDebt > currentDebt) {
             uint256 additionalDebt = newTargetDebt - currentDebt;
@@ -199,11 +199,11 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
     function test_Pnl_Profit_CollateralYieldAccrual() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, , , , ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(500);
 
-        (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, , , , ) = strategy.getNetAssets();
 
         assertGt(netAssetsAfter, netAssetsBefore, "Net assets should increase from yield");
     }
@@ -211,7 +211,7 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
     function test_Pnl_Profit_YieldExceedsDebtInterest() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, , , , ) = strategy.getNetAssets();
         uint256 ppsBeforeReport = strategy.convertToAssets(ONE_SHARE_UNIT());
 
         _simulateCollateralPriceChange(1200);
@@ -220,7 +220,7 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
         strategy.harvestAndReport();
 
         uint256 ppsAfterReport = strategy.convertToAssets(ONE_SHARE_UNIT());
-        (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, , , , ) = strategy.getNetAssets();
 
         assertGt(netAssetsAfter, netAssetsBefore, "Net assets should increase");
         assertGe(ppsAfterReport, ppsBeforeReport, "PPS should increase or stay same after profit");
@@ -290,11 +290,11 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
     function test_Pnl_Loss_DebtInterestExceedsYield() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, , , , ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(-800);
 
-        (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, , , , ) = strategy.getNetAssets();
 
         assertLt(netAssetsAfter, netAssetsBefore, "Net assets should decrease from net negative yield");
     }
@@ -345,16 +345,16 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
 
     function test_Pnl_Loss_PartialLoss_StillSolvent() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
-        (uint256 netAssetsBefore, uint256 totalCollateralBefore, uint256 totalDebtBefore) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, uint256 marketCollateralBefore, , uint256 marketDebtBefore, ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(-500);
 
-        (uint256 netAssetsAfter, uint256 totalCollateralAfter, uint256 totalDebtAfter) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, uint256 marketCollateralAfter, , uint256 marketDebtAfter, ) = strategy.getNetAssets();
 
         assertGt(netAssetsAfter, 0, "Strategy should still have positive net assets");
         assertLt(netAssetsAfter, netAssetsBefore, "Net assets should decrease");
 
-        assertEq(totalCollateralBefore, totalCollateralAfter, "Collateral should remain same");
-        assertGt(totalDebtAfter, totalDebtBefore, "Debt should increase due to interest");
+        assertEq(marketCollateralBefore, marketCollateralAfter, "Collateral should remain same");
+        assertGt(marketDebtAfter, marketDebtBefore, "Debt should increase due to interest");
     }
 }

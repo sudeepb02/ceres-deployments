@@ -62,11 +62,11 @@ abstract contract LeveragedStrategyFuzz is LeveragedStrategySharedBase {
 
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
 
-        (uint256 netAssetsBefore, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, , , , ) = strategy.getNetAssets();
 
         _simulateCollateralPriceChange(priceChangePercentBps);
 
-        (uint256 netAssetsAfter, , ) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, , , , ) = strategy.getNetAssets();
 
         if (priceChangePercentBps > 0) {
             assertGt(netAssetsAfter, netAssetsBefore, "Should gain on price increase");

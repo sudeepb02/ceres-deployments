@@ -40,7 +40,7 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
     address public constant COLLATERAL_VAULT = 0xbaC3983342b805E66F8756E265b3B0DdF4B685Fc; // Collateral vault
     address public constant DEBT_VAULT = 0x37ca03aD51B8ff79aAD35FadaCBA4CEDF0C3e74e; // Debt vault
 
-    address public constant ASSET_TO_COLLATERAL_ORACLE = 0x3d14C2c22fFfB6fD00759451A7656A052B705B98;
+    address public constant COLLATERAL_TO_ASSET_ORACLE = 0x3d14C2c22fFfB6fD00759451A7656A052B705B98;
     address public constant ASSET_TO_USD_ORACLE = 0xB92B9341be191895e8C68b170aC4528839fFe0b2;
     address public constant DEBT_TO_USD_ORACLE = 0x997d72fb46690f304C7DB92df9AA823323fb23B2;
 
@@ -127,7 +127,7 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
     function _setupOracleAdapter() internal override {
         eulerOracleAdapter = new EulerOracleAdapter(
             ORACLE_PRECISION,
-            ASSET_TO_COLLATERAL_ORACLE,
+            COLLATERAL_TO_ASSET_ORACLE,
             ASSET_TO_USD_ORACLE,
             DEBT_TO_USD_ORACLE,
             ASSET_TOKEN,
@@ -256,7 +256,7 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
         strategy.requestUpdate(strategy.FLASH_LOAN_ROUTER_KEY(), address(flashLoanRouter));
 
         // Set LTV parameters
-        strategy.setTargetLtv(TARGET_LTV_BPS);
+        strategy.setTargetLtv(TARGET_LTV_BPS, LTV_BUFFER_BPS);
         strategy.updateConfig(MAX_SLIPPAGE_BPS, 15_00, 0);
         strategy.setDepositWithdrawLimits(DEPOSIT_LIMIT, REDEEM_LIMIT_SHARES, 0);
 
@@ -291,7 +291,7 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
         vm.label(address(collateralVault), "Collateral Vault");
         vm.label(address(borrowVault), "Borrow Vault");
         vm.label(address(evc), "EVC");
-        vm.label(address(ASSET_TO_COLLATERAL_ORACLE), "ASSET_TO_COLLATERAL_ORACLE");
+        vm.label(address(COLLATERAL_TO_ASSET_ORACLE), "COLLATERAL_TO_ASSET_ORACLE");
         vm.label(address(ASSET_TO_USD_ORACLE), "ASSET_TO_USD_ORACLE");
         vm.label(address(DEBT_TO_USD_ORACLE), "DEBT_TO_USD_ORACLE");
 

@@ -81,11 +81,11 @@ abstract contract LeveragedStrategySharedBase is LeveragedStrategyBaseSetup {
         assertEq(shares, depositAmount, "Shares should equal deposit for first deposit");
         assertEq(strategy.balanceOf(user1), shares, "User balance should match shares");
 
-        (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, uint256 marketCollateral, , uint256 marketDebt, ) = strategy.getNetAssets();
         _assertApproxEqBps(netAssets, depositAmount, 10, "Net assets should match deposit");
 
-        _assertApproxEqBps(totalCollateral, depositAmountInCollateral, 10, "Collateral should match deposit");
-        assertEq(totalDebt, 0, "Debt should be 0");
+        _assertApproxEqBps(marketCollateral, depositAmountInCollateral, 10, "Collateral should match deposit");
+        assertEq(marketDebt, 0, "Debt should be 0");
     }
 
     function test_Basic_Deposit_Basic_MultipleUsers() public {

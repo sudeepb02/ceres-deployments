@@ -40,7 +40,7 @@ contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
     address public constant COLLATERAL_VAULT = 0x2F849ba554C1ea2eDe9C240Bbe9d247dd6eC8A6B;
     address public constant DEBT_VAULT = 0x3573A84Bee11D49A1CbCe2b291538dE7a7dD81c6;
 
-    address public constant ASSET_TO_COLLATERAL_ORACLE = 0x1ada463F00833545b33A1B6551d0954Ba32be1fc;
+    address public constant COLLATERAL_TO_ASSET_ORACLE = 0x1ada463F00833545b33A1B6551d0954Ba32be1fc;
     address public constant ASSET_TO_USD_ORACLE = 0xEd8e9151602E40233D358d6C323d9F9717a1bec4;
     address public constant DEBT_TO_USD_ORACLE = 0xD35657aE033A86FFa8fc6Bc767C5eb57C7c3D4B8;
 
@@ -129,7 +129,7 @@ contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
     function _setupOracleAdapter() internal override {
         eulerOracleAdapter = new EulerOracleAdapter(
             ORACLE_PRECISION,
-            ASSET_TO_COLLATERAL_ORACLE,
+            COLLATERAL_TO_ASSET_ORACLE,
             ASSET_TO_USD_ORACLE,
             DEBT_TO_USD_ORACLE,
             ASSET_TOKEN,
@@ -254,7 +254,7 @@ contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
 
         // Set LTV parameters
         strategy.updateConfig(MAX_SLIPPAGE_BPS, 15_00, 5_00);
-        strategy.setTargetLtv(TARGET_LTV_BPS);
+        strategy.setTargetLtv(TARGET_LTV_BPS, LTV_BUFFER_BPS);
         strategy.setDepositWithdrawLimits(DEPOSIT_LIMIT, REDEEM_LIMIT_SHARES, 0);
 
         vm.stopPrank();
@@ -288,7 +288,7 @@ contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
         vm.label(address(collateralVault), "Collateral Vault");
         vm.label(address(borrowVault), "Borrow Vault");
         vm.label(address(evc), "EVC");
-        vm.label(address(ASSET_TO_COLLATERAL_ORACLE), "ASSET_TO_COLLATERAL_ORACLE");
+        vm.label(address(COLLATERAL_TO_ASSET_ORACLE), "COLLATERAL_TO_ASSET_ORACLE");
         vm.label(address(ASSET_TO_USD_ORACLE), "ASSET_TO_USD_ORACLE");
         vm.label(address(DEBT_TO_USD_ORACLE), "DEBT_TO_USD_ORACLE");
 

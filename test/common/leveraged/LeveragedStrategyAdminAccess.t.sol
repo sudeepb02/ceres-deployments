@@ -92,8 +92,8 @@ abstract contract LeveragedStrategyAdminAccess is LeveragedStrategySharedBase {
 
         vm.prank(management);
         vm.expectEmit(true, true, true, true);
-        emit ILeveragedStrategy.TargetLtvUpdated(newLtv);
-        strategy.setTargetLtv(newLtv);
+        emit ILeveragedStrategy.TargetLtvUpdated(newLtv, LTV_BUFFER_BPS);
+        strategy.setTargetLtv(newLtv, LTV_BUFFER_BPS);
 
         assertEq(_targetLtvBps(), newLtv, "Target LTV should be updated");
     }
@@ -199,13 +199,13 @@ abstract contract LeveragedStrategyAdminAccess is LeveragedStrategySharedBase {
     function testRevert_Admin_SetTargetLtv_NotManagement() public {
         vm.prank(user1);
         vm.expectRevert();
-        strategy.setTargetLtv(6000);
+        strategy.setTargetLtv(6000, LTV_BUFFER_BPS);
     }
 
     function testRevert_Admin_SetTargetLtv_InvalidLtv() public {
         vm.prank(management);
         vm.expectRevert(LibError.InvalidLtv.selector);
-        strategy.setTargetLtv(10000);
+        strategy.setTargetLtv(10000, 0);
     }
 
     function testRevert_Admin_SetMaxSlippage_InvalidValue() public {

@@ -34,6 +34,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
 
     // LTV parameters - common across all protocols
     uint16 constant TARGET_LTV_BPS = 7000; // 70%
+    uint16 constant LTV_BUFFER_BPS = 200; // 2% buffer
     uint256 constant MAX_LTV_BPS = 7500; // 75%
     uint256 constant MIN_LTV_BPS = 6500; // 65%
     uint16 constant MAX_SLIPPAGE_BPS = 25; // 0.25%
@@ -280,13 +281,13 @@ abstract contract LeveragedStrategyBaseSetup is Test {
 
     /// @notice Get strategy's current leverage ratio
     function _getCurrentLeverage() internal view returns (uint256 leverageRatio) {
-        (uint256 netAssets, uint256 totalCollateral, ) = strategy.getNetAssets();
+        (, uint256 netAssets, uint256 marketCollateral, , , ) = strategy.getNetAssets();
 
         if (netAssets == 0) return 0;
 
         // Leverage = (Collateral / NetAssets)
         // Convert to BPS: leverage * 10000
-        uint256 collateralInAssets = oracleAdapter.convertCollateralToAssets(totalCollateral);
+        uint256 collateralInAssets = oracleAdapter.convertCollateralToAssets(marketCollateral);
         leverageRatio = (collateralInAssets * BPS_PRECISION) / netAssets;
     }
 
@@ -310,14 +311,14 @@ abstract contract LeveragedStrategyBaseSetup is Test {
 
     /// @notice Get strategy state for debugging
     function _logStrategyState(string memory label) internal view {
-        (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, uint256 marketCollateral, , uint256 marketDebt, ) = strategy.getNetAssets();
         uint256 leverage = _getCurrentLeverage();
-        uint256 ltv = _calculateLtv(totalCollateral, totalDebt);
+        uint256 ltv = _calculateLtv(marketCollateral, marketDebt);
 
         console2.log("=== Strategy State:", label, "===");
         console2.log("Net Assets:", netAssets);
-        console2.log("Total Collateral:", totalCollateral);
-        console2.log("Total Debt:", totalDebt);
+        console2.log("Market Collateral:", marketCollateral);
+        console2.log("Market Debt:", marketDebt);
         console2.log("Leverage Ratio (BPS):", leverage);
         console2.log("LTV (BPS):", ltv);
         console2.log("Asset Balance:", _balance(address(assetToken), address(strategy)));
@@ -331,10 +332,10 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     }
 
     function _getRebalanceAmountForWithdraw(uint256 withdrawAmount) internal view returns (uint256) {
-        (uint256 netAssets, , uint256 totalDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, , , uint256 marketDebt, ) = strategy.getNetAssets();
 
-        // Rebalance is not required if the totalDebt is 0
-        // if (totalDebt == 0) return 0;
+        // Rebalance is not required if the marketDebt is 0
+        if (marketDebt == 0) return 0;
 
         if (withdrawAmount > netAssets) {
             withdrawAmount = netAssets;
@@ -346,10 +347,10 @@ abstract contract LeveragedStrategyBaseSetup is Test {
             strategy.oracleAdapter()
         );
 
-        console.log("Total Debt:", totalDebt);
+        console.log("Market Debt:", marketDebt);
         console.log("Target Debt after withdraw of", withdrawAmount, ":", targetDebt);
 
-        uint256 rebalanceAmount = totalDebt > targetDebt ? totalDebt - targetDebt : 0;
+        uint256 rebalanceAmount = marketDebt > targetDebt ? marketDebt - targetDebt : 0;
         return rebalanceAmount;
     }
 
@@ -612,7 +613,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     }
 
     function _targetLtvBps() internal view returns (uint16 targetLtvBps_) {
-        (, targetLtvBps_, , , ) = strategy.getLeveragedStrategyConfig();
+        (, targetLtvBps_, , , , ) = strategy.getLeveragedStrategyConfig();
     }
 
     function _maxSlippageBps() internal view returns (uint16 maxSlippageBps_) {
@@ -620,7 +621,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     }
 
     function _swapperAddress() internal view returns (address swapperAddress_) {
-        (, , , swapperAddress_, ) = strategy.getLeveragedStrategyConfig();
+        (, , , , swapperAddress_, ) = strategy.getLeveragedStrategyConfig();
     }
 
     function _baseConfig()
