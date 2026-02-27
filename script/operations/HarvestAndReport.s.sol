@@ -33,8 +33,8 @@ contract HarvestAndReport is StrategyOperations {
         _logStrategyState(strategy);
 
         // Get private key from environment
-        uint256 managementPvtKey = vm.envUint("MANAGEMENT_PVT_KEY");
-        vm.startBroadcast(managementPvtKey);
+        uint256 keeperPvtKey = vm.envUint("KEEPER_PVT_KEY");
+        vm.startBroadcast(keeperPvtKey);
 
         console.log("\nHarvesting rewards and reporting to vault...");
         strategy.harvestAndReport();

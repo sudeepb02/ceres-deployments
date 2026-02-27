@@ -48,7 +48,7 @@ abstract contract DeploymentConstantsUsdfEthereum is DeploymentConstants {
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // Euler oracle addresses
-    address internal constant ASSET_TO_COLLATERAL_ORACLE = 0x1ada463F00833545b33A1B6551d0954Ba32be1fc;
+    address internal constant COLLATERAL_TO_ASSET_ORACLE = 0x1ada463F00833545b33A1B6551d0954Ba32be1fc;
     address internal constant ASSET_TO_USD_ORACLE = 0xEd8e9151602E40233D358d6C323d9F9717a1bec4;
     address internal constant DEBT_TO_USD_ORACLE = 0xD35657aE033A86FFa8fc6Bc767C5eb57C7c3D4B8;
 
@@ -72,6 +72,7 @@ abstract contract DeploymentConstantsUsdfEthereum is DeploymentConstants {
 
     // LTV parameters
     uint16 internal constant TARGET_LTV_BPS = 8572; // 70%
+    uint16 internal constant LTV_BUFFER_BPS = 200; // 2% buffer
     uint16 internal constant MAX_SLIPPAGE_BPS = 25; // 0.25%
     uint16 internal constant MAX_LOSS_BPS = 200; // 2%
 

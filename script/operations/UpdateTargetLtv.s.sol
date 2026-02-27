@@ -23,11 +23,19 @@ contract UpdateTargetLtv is StrategyOperations {
         uint16 newTargetLtv = uint16(vm.envUint("NEW_TARGET_LTV"));
         require(newTargetLtv > 0 && newTargetLtv < 10000, "Invalid target LTV");
 
+        // Read current ltvBufferBps from strategy; allow optional override via env var
+        (, , uint16 currentLtvBufferBps, , , ) = strategy.getLeveragedStrategyConfig();
+        uint16 ltvBufferBps = currentLtvBufferBps;
+        try vm.envUint("LTV_BUFFER_BPS") returns (uint256 envBuffer) {
+            if (envBuffer > 0 && envBuffer < 10000) ltvBufferBps = uint16(envBuffer);
+        } catch {}
+
         console.log("\n==============================================");
         console.log("Update Target LTV");
         console.log("==============================================");
         console.log("Strategy:", address(strategy));
         FormatUtils.logBps("New Target LTV:", newTargetLtv);
+        FormatUtils.logBps("LTV Buffer:", ltvBufferBps);
 
         // Log current state
         console.log("\n--- Current State ---");
@@ -38,7 +46,7 @@ contract UpdateTargetLtv is StrategyOperations {
         vm.startBroadcast(managementPvtKey);
 
         // Set target LTV
-        strategy.setTargetLtv(newTargetLtv);
+        strategy.setTargetLtv(newTargetLtv, ltvBufferBps);
 
         vm.stopBroadcast();
 

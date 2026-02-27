@@ -44,9 +44,12 @@ contract RebalanceLeverageDown is StrategyOperations {
                 console.log("\nUpdating target LTV first...");
                 FormatUtils.logBps("New Target LTV:", newTargetLtv);
 
+                // Read current ltvBufferBps from strategy to preserve it
+                (, , uint16 currentLtvBufferBps, , , ) = strategy.getLeveragedStrategyConfig();
+
                 uint256 managementPrivateKey = vm.envUint("MANAGEMENT_PVT_KEY");
                 vm.startBroadcast(managementPrivateKey);
-                strategy.setTargetLtv(uint16(newTargetLtv));
+                strategy.setTargetLtv(uint16(newTargetLtv), currentLtvBufferBps);
                 vm.stopBroadcast();
             }
         } catch {}
@@ -61,25 +64,25 @@ contract RebalanceLeverageDown is StrategyOperations {
         uint256 deleverageAmountInCollateral;
         {
             uint256 targetDebt;
-            (, uint16 targetLtvBps, , , ) = strategy.getLeveragedStrategyConfig();
+            (, uint16 targetLtvBps, , , , ) = strategy.getLeveragedStrategyConfig();
 
-            (uint256 netAssets, uint256 totalCollateral, uint256 totalDebt) = strategy.getNetAssets();
+            (, uint256 netAssets, uint256 marketCollateral, , uint256 marketDebt, ) = strategy.getNetAssets();
 
             FormatUtils.logWithSymbol("Net assets", netAssets, IERC20Metadata(asset).decimals(), "Assets");
             FormatUtils.logWithSymbol(
-                "Total Collateral",
-                totalCollateral,
+                "Market Collateral",
+                marketCollateral,
                 IERC20Metadata(collateral).decimals(),
                 "Collateral Tokens"
             );
-            FormatUtils.logWithSymbol("Total Debt", totalDebt, IERC20Metadata(debt).decimals(), "DebtTokens");
+            FormatUtils.logWithSymbol("Market Debt", marketDebt, IERC20Metadata(debt).decimals(), "DebtTokens");
 
             // Calculate target debt amount
             targetDebt = LeverageLib.computeTargetDebt(netAssets, targetLtvBps, strategy.oracleAdapter());
 
             console.log("Target debt amount:", targetDebt);
 
-            deleverageAmountDebt = totalDebt > targetDebt ? totalDebt - targetDebt : 0;
+            deleverageAmountDebt = marketDebt > targetDebt ? marketDebt - targetDebt : 0;
             if (deleverageAmountDebt == 0) {
                 revert("Leverage down not needed, already at or below target LTV");
             }
@@ -88,7 +91,7 @@ contract RebalanceLeverageDown is StrategyOperations {
             IOracleAdapter oracleAdapter = strategy.oracleAdapter();
             deleverageAmountInCollateral = oracleAdapter.convertDebtToCollateral(deleverageAmountDebt);
 
-            console.log("Current debt:", totalDebt);
+            console.log("Current debt:", marketDebt);
             FormatUtils.logWithSymbol(
                 "Deleverage amount (debt):",
                 deleverageAmountDebt,

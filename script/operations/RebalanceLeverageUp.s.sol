@@ -29,25 +29,26 @@ contract RebalanceLeverageUp is StrategyOperations {
         try vm.envBool("USE_FLASH_LOAN") returns (bool _useFlashLoan) {
             useFlashLoan = _useFlashLoan;
         } catch {}
+        
         console.log("==============================================");
         console.log("Leverage Up Rebalance");
         console.log("==============================================");
         console.log("Strategy:", address(strategy));
         console.log("Use Flash Loan:", useFlashLoan);
 
-        (, uint16 targetLtvBps, , , ) = strategy.getLeveragedStrategyConfig();
+        (, uint16 targetLtvBps, , , , ) = strategy.getLeveragedStrategyConfig();
 
         // Log current state
         console.log("\n--- Current State: Before rebalance ---");
         _logStrategyState(strategy);
 
         uint256 targetDebt;
-        (uint256 netAssets, , uint256 totalDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, , , uint256 marketDebt, ) = strategy.getNetAssets();
 
         targetDebt = LeverageLib.computeTargetDebt(netAssets, targetLtvBps, strategy.oracleAdapter());
         console.log("Target debt amount:", targetDebt);
 
-        uint256 debtAmount = targetDebt > totalDebt ? targetDebt - totalDebt : 0;
+        uint256 debtAmount = targetDebt > marketDebt ? targetDebt - marketDebt : 0;
         if (debtAmount == 0) revert("Leverage up not possible, already at or above target LTV");
 
         FormatUtils.logWithSymbol(

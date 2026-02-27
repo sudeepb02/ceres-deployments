@@ -26,7 +26,7 @@ contract Deploy04_EulerOracleAdapter is Script, DeploymentConstantsUsdfEthereum 
         console.log("Asset Token:", ASSET_TOKEN);
         console.log("Collateral Token:", COLLATERAL_TOKEN);
         console.log("Debt Token:", DEBT_TOKEN);
-        console.log("Asset to Collateral Oracle:", ASSET_TO_COLLATERAL_ORACLE);
+        console.log("Collateral to Asset Oracle:", COLLATERAL_TO_ASSET_ORACLE);
         console.log("Asset to USD Oracle:", ASSET_TO_USD_ORACLE);
         console.log("Debt to USD Oracle:", DEBT_TO_USD_ORACLE);
 
@@ -43,7 +43,7 @@ contract Deploy04_EulerOracleAdapter is Script, DeploymentConstantsUsdfEthereum 
 
         EulerOracleAdapter oracleAdapter = new EulerOracleAdapter(
             ORACLE_PRECISION,
-            ASSET_TO_COLLATERAL_ORACLE,
+            COLLATERAL_TO_ASSET_ORACLE,
             ASSET_TO_USD_ORACLE,
             DEBT_TO_USD_ORACLE,
             ASSET_TOKEN,
@@ -92,7 +92,7 @@ contract Deploy04_EulerOracleAdapter is Script, DeploymentConstantsUsdfEthereum 
             args[5] = vm.toString(
                 abi.encode(
                     ORACLE_PRECISION,
-                    ASSET_TO_COLLATERAL_ORACLE,
+                    COLLATERAL_TO_ASSET_ORACLE,
                     ASSET_TO_USD_ORACLE,
                     DEBT_TO_USD_ORACLE,
                     ASSET_TOKEN,

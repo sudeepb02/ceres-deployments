@@ -48,7 +48,7 @@ abstract contract StrategyOperations is Script {
     function _getPeripheryContracts(
         LeveragedEuler strategy
     ) internal view returns (address swapper, address flashLoanRouter) {
-        (, , , swapper, flashLoanRouter) = strategy.getLeveragedStrategyConfig();
+        (, , , , swapper, flashLoanRouter) = strategy.getLeveragedStrategyConfig();
     }
 
     function _isAssetCollateral(LeveragedEuler strategy) internal view returns (bool) {
@@ -213,9 +213,9 @@ abstract contract StrategyOperations is Script {
         uint8 decimals = strategy.decimals();
         uint8 assetDecimals = IERC20Metadata(asset).decimals();
 
-        (uint256 netAssets, uint256 collateralAmount, uint256 debtAmount) = strategy.getNetAssets();
+        (, uint256 netAssets, , uint256 collateralAmount, uint256 debtAmount, ) = strategy.getNetAssets();
         uint256 ltv = strategy.getStrategyLtv();
-        (, uint16 targetLtv, , , ) = strategy.getLeveragedStrategyConfig();
+        (, uint16 targetLtv, , , , ) = strategy.getLeveragedStrategyConfig();
         uint256 withdrawalReserve = strategy.withdrawalReserve();
         uint256 currentRequestId = strategy.currentRequestId();
 
@@ -262,6 +262,7 @@ abstract contract StrategyOperations is Script {
             uint16 maxLossBps,
             uint48 lastReportTimestamp,
             address performanceFeeRecipient,
+            address roleManager
         ) = strategy.getBaseStrategyConfig();
 
         console.log("\n--- Strategy Config ---");
@@ -276,6 +277,7 @@ abstract contract StrategyOperations is Script {
         FormatUtils.logBps("Max Loss Bps:           ", maxLossBps);
         console.log("Last Report Timestamp:         ", lastReportTimestamp);
         console.log("Performance Fee Recipient:     ", performanceFeeRecipient);
+        console.log("Role Manager:                  ", roleManager);
 
         console.log("----------------------");
     }
@@ -413,11 +415,11 @@ abstract contract StrategyOperations is Script {
         uint8 assetDecimals = IERC20Metadata(asset).decimals();
         uint8 debtDecimals = IERC20Metadata(debt).decimals();
 
-        (uint256 netAssets, , uint256 totalDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, , , uint256 marketDebt, ) = strategy.getNetAssets();
 
         console.log("\n--- Calculating Rebalance Amount ---");
         FormatUtils.logWithSymbol("Net assets:     ", netAssets, assetDecimals, "AssetTokens");
-        FormatUtils.logWithSymbol("Total debt:     ", totalDebt, debtDecimals, "DebtTokens");
+        FormatUtils.logWithSymbol("Market debt:    ", marketDebt, debtDecimals, "DebtTokens");
         FormatUtils.logWithSymbol("Withdraw amount:", withdrawAmount, assetDecimals, "AssetTokens");
 
         // Cap withdraw amount at net assets
@@ -432,13 +434,13 @@ abstract contract StrategyOperations is Script {
         }
 
         // Calculate target debt after withdrawal
-        (, uint16 targetLtvBps, , , ) = strategy.getLeveragedStrategyConfig();
+        (, uint16 targetLtvBps, , , , ) = strategy.getLeveragedStrategyConfig();
         uint256 targetDebt = LeverageLib.computeTargetDebt(netAssets - withdrawAmount, targetLtvBps, strategy.oracleAdapter());
 
         FormatUtils.logWithSymbol("Target debt after withdrawal:", targetDebt, debtDecimals, "DebtTokens");
 
         // Rebalance amount is the difference between current and target debt
-        rebalanceAmount = totalDebt > targetDebt ? totalDebt - targetDebt : 0;
+        rebalanceAmount = marketDebt > targetDebt ? marketDebt - targetDebt : 0;
         FormatUtils.logWithSymbol("Calculated rebalance amount: ", rebalanceAmount, debtDecimals, "DebtTokens");
 
         return rebalanceAmount;

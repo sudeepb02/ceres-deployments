@@ -175,8 +175,9 @@ contract Deploy06_ConfigureStrategy is Script, DeploymentConstantsUsdfEthereum {
         console.log("  Max loss:", MAX_LOSS_BPS, "bps");
 
         // Set target LTV
-        strategy.setTargetLtv(TARGET_LTV_BPS);
+        strategy.setTargetLtv(TARGET_LTV_BPS, LTV_BUFFER_BPS);
         console.log("  Target LTV:", TARGET_LTV_BPS, "bps");
+        console.log("  LTV Buffer:", LTV_BUFFER_BPS, "bps");
 
         // Set deposit/redeem limits
         strategy.setDepositWithdrawLimits(DEPOSIT_LIMIT, REDEEM_LIMIT_SHARES, 0);
