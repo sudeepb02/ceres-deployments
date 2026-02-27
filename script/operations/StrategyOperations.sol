@@ -255,7 +255,8 @@ abstract contract StrategyOperations is Script {
 
         uint128 withdrawalReserve = strategy.withdrawalReserve();
         uint128 currentRequestId = strategy.currentRequestId();
-        (uint128 depositLimit, uint128 redeemLimitShares, uint128 minDepositAmount) = strategy.getDepositWithdrawLimits();
+        (uint128 depositLimit, uint128 redeemLimitShares, uint128 minDepositAmount) = strategy
+            .getDepositWithdrawLimits();
         (
             uint16 maxSlippageBps,
             uint16 performanceFeeBps,
@@ -435,7 +436,11 @@ abstract contract StrategyOperations is Script {
 
         // Calculate target debt after withdrawal
         (, uint16 targetLtvBps, , , , ) = strategy.getLeveragedStrategyConfig();
-        uint256 targetDebt = LeverageLib.computeTargetDebt(netAssets - withdrawAmount, targetLtvBps, strategy.oracleAdapter());
+        uint256 targetDebt = LeverageLib.computeTargetDebt(
+            netAssets - withdrawAmount,
+            targetLtvBps,
+            strategy.oracleAdapter()
+        );
 
         FormatUtils.logWithSymbol("Target debt after withdrawal:", targetDebt, debtDecimals, "DebtTokens");
 

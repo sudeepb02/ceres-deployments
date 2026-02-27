@@ -29,7 +29,6 @@ contract UpdateTargetLtv is StrategyOperations {
         try vm.envUint("LTV_BUFFER_BPS") returns (uint256 envBuffer) {
             if (envBuffer > 0 && envBuffer < 10000) ltvBufferBps = uint16(envBuffer);
         } catch {}
-
         console.log("\n==============================================");
         console.log("Update Target LTV");
         console.log("==============================================");

@@ -29,7 +29,6 @@ contract RebalanceLeverageUp is StrategyOperations {
         try vm.envBool("USE_FLASH_LOAN") returns (bool _useFlashLoan) {
             useFlashLoan = _useFlashLoan;
         } catch {}
-        
         console.log("==============================================");
         console.log("Leverage Up Rebalance");
         console.log("==============================================");
