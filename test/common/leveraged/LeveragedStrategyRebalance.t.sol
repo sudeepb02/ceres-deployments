@@ -264,7 +264,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
 
         assertGt(assets, 0, "Should receive assets");
 
-        (, , uint256 debtAfter) = strategy.getNetAssets();
+        (, , , , uint256 debtAfter, ) = strategy.getNetAssets();
         assertLt(
             debtAfter,
             (DEFAULT_DEPOSIT() * TARGET_LTV_BPS) / BPS_PRECISION,
@@ -295,7 +295,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
 
         assertGt(assets, 0, "Should receive assets on full withdrawal");
 
-        (uint256 netAssets, , ) = strategy.getNetAssets();
+        (, uint256 netAssets, , , , ) = strategy.getNetAssets();
         assertLt(netAssets, depositAmount / 100, "Net assets should be near zero after full withdrawal");
     }
 
@@ -309,7 +309,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
         uint256 ltvAfterDrop = strategy.getStrategyLtv();
         assertGt(ltvAfterDrop, initialLtv, "LTV should increase after price drop");
 
-        (uint256 netAssets, , uint256 currentDebt) = strategy.getNetAssets();
+        (, uint256 netAssets, , , uint256 currentDebt, ) = strategy.getNetAssets();
         uint256 targetDebt = LeverageLib.computeTargetDebt(netAssets, TARGET_LTV_BPS, strategy.oracleAdapter());
 
         uint256 deleverageAmount = currentDebt - targetDebt;
@@ -346,10 +346,10 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
         vm.prank(keeper);
         strategy.rebalance(debtAmount1, true, swapData);
 
-        (uint256 netAssets1, , ) = strategy.getNetAssets();
+        (, uint256 netAssets1, , , , ) = strategy.getNetAssets();
 
         uint256 additionalDebt = LeverageLib.computeTargetDebt(netAssets1, TARGET_LTV_BPS, strategy.oracleAdapter());
-        (, , uint256 currentDebt) = strategy.getNetAssets();
+        (, , , , uint256 currentDebt, ) = strategy.getNetAssets();
         uint256 debtAmount2 = additionalDebt > currentDebt ? additionalDebt - currentDebt : 0;
 
         if (debtAmount2 > 0) {

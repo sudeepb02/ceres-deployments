@@ -345,11 +345,13 @@ abstract contract LeveragedStrategyPnl is LeveragedStrategySharedBase {
 
     function test_Pnl_Loss_PartialLoss_StillSolvent() public {
         _setupInitialLeveragePosition(DEFAULT_DEPOSIT());
-        (, uint256 netAssetsBefore, uint256 marketCollateralBefore, , uint256 marketDebtBefore, ) = strategy.getNetAssets();
+        (, uint256 netAssetsBefore, uint256 marketCollateralBefore, , uint256 marketDebtBefore, ) = strategy
+            .getNetAssets();
 
         _simulateCollateralPriceChange(-500);
 
-        (, uint256 netAssetsAfter, uint256 marketCollateralAfter, , uint256 marketDebtAfter, ) = strategy.getNetAssets();
+        (, uint256 netAssetsAfter, uint256 marketCollateralAfter, , uint256 marketDebtAfter, ) = strategy
+            .getNetAssets();
 
         assertGt(netAssetsAfter, 0, "Strategy should still have positive net assets");
         assertLt(netAssetsAfter, netAssetsBefore, "Net assets should decrease");
