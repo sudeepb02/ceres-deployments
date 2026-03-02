@@ -122,6 +122,7 @@ export async function getKyberSwapData(params) {
 
     return { detailed, raw: tx.data };
   } catch (error) {
+    writeOutputs({}, error); // Write error details to file for debugging
     throw new Error(
       `Kyber API request failed: ${error.response?.data?.message ?? error.message}`,
     );
