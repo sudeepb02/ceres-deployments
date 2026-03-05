@@ -15,13 +15,15 @@ contract MockPriceOracle {
     address public immutable BASE_TOKEN;
     address public immutable QUOTE_TOKEN;
 
-    int256 public percentageChangeBps;
+    // Immutable so that vm.mockFunction (which runs code in callee's storage context) reads the
+    // correct value from bytecode rather than from the callee's storage slot.
+    int256 public immutable PERCENTAGE_CHANGE_BPS;
 
     int256 private constant BPS_DENOMINATOR = 10000;
 
     error InvalidBaseOrQuote();
 
-    constructor(uint256 baseToQuotePrice, uint256 quoteToBasePrice, address baseToken, address quoteToken) {
+    constructor(uint256 baseToQuotePrice, uint256 quoteToBasePrice, address baseToken, address quoteToken, int256 percentageChangeBps) {
         // Quote to base price might be zero if the oracle does not support reverse pricing, e.g Euler ERC4626 oracles
         if (baseToQuotePrice == 0) revert LibError.InvalidPrice();
         if (baseToken == address(0) || quoteToken == address(0)) revert InvalidBaseOrQuote();
@@ -30,9 +32,11 @@ contract MockPriceOracle {
         QUOTE_TO_BASE_PRICE = quoteToBasePrice;
         BASE_TOKEN = baseToken;
         QUOTE_TOKEN = quoteToken;
+        PERCENTAGE_CHANGE_BPS = percentageChangeBps;
 
         console2.log("MockPriceOracle initialized with BASE_TO_QUOTE_PRICE:", BASE_TO_QUOTE_PRICE);
         console2.log("MockPriceOracle initialized with QUOTE_TO_BASE_PRICE:", QUOTE_TO_BASE_PRICE);
+        console2.log("MockPriceOracle initialized with PERCENTAGE_CHANGE_BPS:", PERCENTAGE_CHANGE_BPS);
     }
 
     function getQuote(uint256 inAmount, address base, address quote) external view returns (uint256 outAmount) {
@@ -49,7 +53,7 @@ contract MockPriceOracle {
 
         // Calculate adjusted price: basePrice * (10000 + percentChangeBps) / 10000
         // This handles both positive and negative percentage changes
-        int256 adjustedPriceSigned = (price * (BPS_DENOMINATOR + percentageChangeBps)) / BPS_DENOMINATOR;
+        int256 adjustedPriceSigned = (price * (BPS_DENOMINATOR + PERCENTAGE_CHANGE_BPS)) / BPS_DENOMINATOR;
 
         // Safety check
         require(adjustedPriceSigned > 0, "MockPriceOracle: adjusted price must be > 0");
