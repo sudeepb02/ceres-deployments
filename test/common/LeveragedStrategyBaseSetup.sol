@@ -435,19 +435,6 @@ abstract contract LeveragedStrategyBaseSetup is Test {
                         AGGREGATOR HELPERS
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Build swap calldata via node helper scripts (Kyber/Paraswap)
-    function _getAggregatorSwapData(
-        string memory script,
-        uint256 chainId,
-        address fromToken,
-        address toToken,
-        uint256 amount,
-        address swapperAddress,
-        string memory swapType,
-        uint8 fromTokenDecimals,
-        uint8 toTokenDecimals
-    ) internal returns (bytes memory) {}
-
     /// @notice Build Kyberswap swap data (exactIn)
     function _getKyberswapSwapData(
         uint256 chainId,
@@ -524,46 +511,6 @@ abstract contract LeveragedStrategyBaseSetup is Test {
             collateralAmount += (collateralAmount * _maxSlippageBps()) / BPS_PRECISION;
             return _getKyberswapSwapData(block.chainid, address(collateralToken), address(debtToken), collateralAmount);
         }
-    }
-
-    /// @notice Rebalance using Kyberswap aggregator (exactIn only)
-    function _rebalanceWithKyberAggregator(uint256 chainId, uint256 debtAmount) internal {
-        // Kyber path is exactIn: DEBT -> COLLATERAL for leverage up
-        _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
-
-        bytes memory swapData = _getKyberswapSwapData(
-            chainId,
-            address(debtToken),
-            address(collateralToken),
-            debtAmount
-        );
-
-        vm.prank(keeper);
-        strategy.rebalance(debtAmount, true, swapData);
-    }
-
-    /// @notice Rebalance using Paraswap aggregator (exactIn for leverage up, exactOut for leverage down)
-    function _rebalanceWithParaswapAggregator(uint256 chainId, uint256 debtAmount, bool isLeverageUp) internal {
-        // Strategy expects debt tokens transferred from caller
-        _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
-
-        bytes memory swapData;
-        if (isLeverageUp) {
-            // Leverage up: DEBT -> COLLATERAL (always exactIn via Paraswap)
-            swapData = _getParaswapSwapData(
-                chainId,
-                address(debtToken),
-                address(collateralToken),
-                debtAmount,
-                "exactIn"
-            );
-        } else {
-            // Deleverage: COLLATERAL -> DEBT (aggregator chosen by isExactOutSwapEnabled)
-            swapData = _getCollateralToDebtSwapData(debtAmount);
-        }
-
-        vm.prank(keeper);
-        strategy.rebalance(debtAmount, isLeverageUp, swapData);
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
