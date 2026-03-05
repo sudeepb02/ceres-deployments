@@ -1,4 +1,4 @@
- // SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.28;
 
 import {console} from "forge-std/Test.sol";
@@ -11,8 +11,10 @@ import {LeveragedStrategyBaseSetup} from "../../common/LeveragedStrategyBaseSetu
 import {IOracleAdapter} from "ceres-strategies/src/interfaces/periphery/IOracleAdapter.sol";
 import {ILeveragedStrategy} from "ceres-strategies/src/interfaces/strategies/ILeveragedStrategy.sol";
 
-import {LeveragedEuler} from "ceres-strategies/src/strategies/LeveragedEuler.sol";
-import {EulerAdapterTypeOne as EulerOracleAdapter} from "ceres-strategies/src/periphery/EulerAdapterTypeOne.sol";
+import {ISilo, ISiloConfig, ISiloLens, LeveragedSilo} from "ceres-strategies/src/strategies/LeveragedSilo.sol";
+import {ISiloOracle} from "ceres-strategies/src/interfaces/silo/ISiloOracle.sol";
+import {SiloAdapterTypeOne} from "ceres-strategies/src/periphery/SiloAdapterTypeOne.sol";
+
 import {CeresSwapper} from "ceres-strategies/src/periphery/CeresSwapper.sol";
 import {RoleManager} from "ceres-strategies/src/periphery/RoleManager.sol";
 import {FlashLoanRouter} from "ceres-strategies/src/periphery/FlashLoanRouter.sol";
@@ -27,57 +29,56 @@ contract WethAgethWethSetup is LeveragedStrategyBaseSetup {
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // Tokens
-    address public constant WETH_TOKEN = 0xFa2B947eEc368f42195f24F36d2aF29f7c24CeC2;
-    address public constant SUSDF_TOKEN = 0xc8CF6D7991f15525488b2A83Df53468D682Ba4B0;
-    address public constant USDC_TOKEN = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    address public constant WETH_TOKEN = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address public constant AGETH_TOKEN = 0xe1B4d34E8754600962Cd944B535180Bd758E6c2e;
     address public constant USD_TOKEN = 0x0000000000000000000000000000000000000348; // synthetic USD representation
 
-    // Euler contracts
-    address public constant EVC = 0x0C9a3dd6b8F28529d72d7f9cE918D493519EE383;
-    address public constant COLLATERAL_VAULT = 0x2F849ba554C1ea2eDe9C240Bbe9d247dd6eC8A6B;
-    address public constant DEBT_VAULT = 0x3573A84Bee11D49A1CbCe2b291538dE7a7dD81c6;
+    // Silo contracts
+    address public constant SILO_LENS = SILO_LENS_ETHEREUM;
+    address public constant SILO_CONFIG = 0xF8D32Da4Ad9378C3754CE846BE02654e52b2C09d;
+    address public constant DEPOSIT_SILO = 0xe394050D179b72197A458Fdfb962Ae69908Aa5A0;
+    address public constant BORROW_SILO = 0x5B3E7d6795bB8670A88d64BbF7ca1CCA69F1f69c;
 
-    address public constant ASSET_TO_COLLATERAL_ORACLE = 0x1ada463F00833545b33A1B6551d0954Ba32be1fc;
-    address public constant ASSET_TO_USD_ORACLE = 0xEd8e9151602E40233D358d6C323d9F9717a1bec4;
-    address public constant DEBT_TO_USD_ORACLE = 0xD35657aE033A86FFa8fc6Bc767C5eb57C7c3D4B8;
+    address public constant COLLATERAL_TO_ASSET_ORACLE = EULER_ROUTER_ETHEREUM;
+    address public constant COLLATERAL_TO_DEBT_ORACLE = 0x69B19191DE88afE17c1Ae56af213C22D3EFD1607; // Deposit Silo
 
     address public constant KYBER_SCALE_HELPER = KYBER_SCALE_HELPER_ETHEREUM;
     address public constant KYBERSWAP_ROUTER = KYBERSWAP_ROUTER_ETHEREUM;
     address public constant AUGUSTUS_REGISTRY = AUGUSTUS_REGISTRY_ETHEREUM;
     address public constant AUGUSTUS_SWAPPER = AUGUSTUS_SWAPPER_ETHEREUM;
 
-    // address public constant EULER_FLASH_LOAN_PROVIDER = 0x3573A84Bee11D49A1CbCe2b291538dE7a7dD81c6; // Euler Debt vault
     FlashLoanRouter.FlashSource public FLASH_LOAN_SOURCE = FlashLoanRouter.FlashSource.ERC3156;
-    address public constant FLASH_LOAN_PROVIDER = SILO_USDC_FLASH_LOAN_PROVIDER;
+    address public constant FLASH_LOAN_PROVIDER = BORROW_SILO;
 
     // Token decimals
-    uint8 public constant USDF_TOKEN_DECIMALS = 18;
-    uint8 public constant SUSDF_TOKEN_DECIMALS = 18;
-    uint8 public constant USDC_TOKEN_DECIMALS = 6;
+    uint8 public constant WETH_TOKEN_DECIMALS = 18;
+    uint8 public constant AGETH_TOKEN_DECIMALS = 18;
 
     // Final strategy constants used throughout the tests
-    address public constant ASSET_TOKEN = USDF_TOKEN;
-    address public constant COLLATERAL_TOKEN = SUSDF_TOKEN;
-    address public constant DEBT_TOKEN = USDC_TOKEN;
+    address public constant ASSET_TOKEN = WETH_TOKEN;
+    address public constant COLLATERAL_TOKEN = AGETH_TOKEN;
+    address public constant DEBT_TOKEN = WETH_TOKEN;
 
-    uint8 public constant ASSET_DECIMALS = USDF_TOKEN_DECIMALS;
-    uint8 public constant COLLATERAL_TOKEN_DECIMALS = SUSDF_TOKEN_DECIMALS;
-    uint8 public constant DEBT_TOKEN_DECIMALS = USDC_TOKEN_DECIMALS;
+    uint8 public constant ASSET_DECIMALS = WETH_TOKEN_DECIMALS;
+    uint8 public constant COLLATERAL_TOKEN_DECIMALS = AGETH_TOKEN_DECIMALS;
+    uint8 public constant DEBT_TOKEN_DECIMALS = WETH_TOKEN_DECIMALS;
 
     uint256 constant ORACLE_PRECISION = 1e18;
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
-    //                                   EULER-SPECIFIC CONTRACTS                               //
+    //                                   SILO-SPECIFIC CONTRACTS                               //
     ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // Euler infrastructure
-    IEVault public collateralVault;
-    IEVault public borrowVault;
-    IEVC public evc;
+    ISilo public depositSilo;
+    ISilo public borrowSilo;
+    ISiloLens public siloLens;
+    ISiloConfig public siloConfig;
 
-    // IEulerOracle public eulerOracle = IEulerOracle(EULER_ORACLE_ROUTER); // Euler oracle router address
+    ISiloOracle public oracleDepositSilo;
+    ISiloOracle public oracleBorrowSilo;
 
-    EulerOracleAdapter public eulerOracleAdapter;
+    SiloAdapterTypeOne public siloOracleAdapter;
 
     MockPriceOracle public mockCollateralToAssetOracle;
     MockPriceOracle public mockAssetToUsdOracle;
@@ -112,61 +113,36 @@ contract WethAgethWethSetup is LeveragedStrategyBaseSetup {
     }
 
     function _setupProtocolContracts() internal override {
-        evc = IEVC(EVC);
+        siloLens = ISiloLens(SILO_LENS);
+        siloConfig = ISiloConfig(SILO_CONFIG);
 
-        // Deploy EVaults
-        collateralVault = IEVault(COLLATERAL_VAULT);
+        depositSilo = ISilo(DEPOSIT_SILO);
+        borrowSilo = ISilo(BORROW_SILO);
 
-        borrowVault = IEVault(DEBT_VAULT);
+        oracleDepositSilo = ISiloOracle(siloConfig.getConfig(DEPOSIT_SILO).solvencyOracle);
+        oracleBorrowSilo = ISiloOracle(siloConfig.getConfig(BORROW_SILO).solvencyOracle);
 
-        // Deploy oracle and set prices
-        // eulerOracle = IEulerOracle(EULER_ORACLE_ROUTER);
+        console.log("Deposit silo oracle:", address(oracleDepositSilo));
+        console.log("Borrow silo oracle:", address(oracleBorrowSilo));
     }
 
     function _setupOracleAdapter() internal override {
-        eulerOracleAdapter = new EulerOracleAdapter(
+        siloOracleAdapter = new SiloAdapterTypeOne(
             ORACLE_PRECISION,
-            ASSET_TO_COLLATERAL_ORACLE,
-            ASSET_TO_USD_ORACLE,
-            DEBT_TO_USD_ORACLE,
+            address(oracleDepositSilo), // collateral to asset oracle: agETH -> WETH
+            address(oracleDepositSilo), // collateral to debt oracle: agETH -> WETH
             ASSET_TOKEN,
             COLLATERAL_TOKEN,
-            DEBT_TOKEN,
-            USD_TOKEN
+            DEBT_TOKEN
         );
 
         // Set base contract reference
-        oracleAdapter = IOracleAdapter(address(eulerOracleAdapter));
+        oracleAdapter = IOracleAdapter(address(siloOracleAdapter));
 
-        console.log("Euler Oracle Adapter deployed at:", address(eulerOracleAdapter));
+        console.log("Euler Oracle Adapter deployed at:", address(siloOracleAdapter));
 
         // Setup mock oracle contracts for testing price changes
-        console.log("Setting up mock oracles for testing...");
-
-        {
-            // Mock collateral to asset oracle
-            mockCollateralToAssetOracle = new MockPriceOracle(
-                eulerOracleAdapter.getCollateralPriceInAssetToken(),
-                0,
-                COLLATERAL_TOKEN,
-                ASSET_TOKEN
-            );
-        }
-
-        {
-            // Mock asset to USD oracle
-            mockAssetToUsdOracle = new MockPriceOracle(
-                eulerOracleAdapter.getAssetPriceInUsd(),
-                0,
-                ASSET_TOKEN,
-                USD_TOKEN
-            );
-        }
-
-        {
-            // Mock debt to USD oracle
-            mockDebtToUsdOracle = new MockPriceOracle(eulerOracleAdapter.getDebtPriceInUsd(), 0, DEBT_TOKEN, USD_TOKEN);
-        }
+        // console.log("Setting up mock oracles for testing...");
     }
 
     function _setupSwapper() internal override {
@@ -205,19 +181,19 @@ contract WethAgethWethSetup is LeveragedStrategyBaseSetup {
         vm.startPrank(management);
 
         address deployedStrategy = Upgrades.deployTransparentProxy(
-            "LeveragedEuler.sol:LeveragedEuler",
+            "LeveragedSilo.sol:LeveragedSilo",
             management,
             abi.encodeCall(
-                LeveragedEuler.initialize,
+                LeveragedSilo.initialize,
                 (
                     ASSET_TOKEN,
-                    "Ceres Leveraged Euler Strategy",
-                    "ceres-USDf-sUSDf-USDC",
+                    "Ceres Leveraged Silo Strategy",
+                    "ceres-WETH-agETH-WETH",
                     COLLATERAL_TOKEN,
                     DEBT_TOKEN,
-                    COLLATERAL_VAULT,
-                    DEBT_VAULT,
-                    address(evc),
+                    SILO_LENS,
+                    SILO_CONFIG,
+                    true,
                     address(roleManager)
                 )
             )
@@ -245,13 +221,13 @@ contract WethAgethWethSetup is LeveragedStrategyBaseSetup {
         vm.startPrank(management);
 
         // Set periphery contracts, for initial setup there is no timelock
-        strategy.requestUpdate(strategy.ORACLE_KEY(), address(eulerOracleAdapter));
+        strategy.requestUpdate(strategy.ORACLE_KEY(), address(siloOracleAdapter));
         strategy.requestUpdate(strategy.SWAPPER_KEY(), address(swapper));
         strategy.requestUpdate(strategy.FLASH_LOAN_ROUTER_KEY(), address(flashLoanRouter));
 
         // Set LTV parameters
-        strategy.updateConfig(MAX_SLIPPAGE_BPS, 15_00, 5_00);
-        strategy.setTargetLtv(TARGET_LTV_BPS);
+        strategy.updateConfig(MAX_SLIPPAGE_BPS, DEFAULT_PERFORMANCE_FEE_BPS, MAX_LOSS_BPS);
+        strategy.setTargetLtv(TARGET_LTV_BPS, LTV_BUFFER_BPS);
         strategy.setDepositWithdrawLimits(DEPOSIT_LIMIT, REDEEM_LIMIT_SHARES, 0);
 
         vm.stopPrank();
@@ -282,15 +258,16 @@ contract WethAgethWethSetup is LeveragedStrategyBaseSetup {
         vm.label(address(ASSET_TOKEN), "ASSET_TOKEN");
         vm.label(address(DEBT_TOKEN), "DEBT_TOKEN");
         vm.label(address(COLLATERAL_TOKEN), "COLLATERAL_TOKEN");
-        vm.label(address(collateralVault), "Collateral Vault");
-        vm.label(address(borrowVault), "Borrow Vault");
-        vm.label(address(evc), "EVC");
-        vm.label(address(ASSET_TO_COLLATERAL_ORACLE), "ASSET_TO_COLLATERAL_ORACLE");
-        vm.label(address(ASSET_TO_USD_ORACLE), "ASSET_TO_USD_ORACLE");
-        vm.label(address(DEBT_TO_USD_ORACLE), "DEBT_TO_USD_ORACLE");
+        vm.label(address(depositSilo), "Deposit Silo");
+        vm.label(address(borrowSilo), "Borrow Silo");
+        vm.label(address(siloLens), "Silo Lens");
+        vm.label(address(siloConfig), "Silo Config");
 
-        vm.label(address(eulerOracleAdapter), "Euler Oracle Adapter");
+        vm.label(address(oracleDepositSilo), "oracleDepositSilo");
+        vm.label(address(oracleBorrowSilo), "oracleBorrowSilo");
+
+        vm.label(address(siloOracleAdapter), "Silo Oracle Adapter");
         vm.label(address(swapper), "Ceres Swapper");
-        vm.label(address(strategy), "LeveragedEuler Strategy");
+        vm.label(address(strategy), "LeveragedSilo Strategy");
     }
 }
