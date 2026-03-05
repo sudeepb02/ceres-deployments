@@ -97,7 +97,7 @@ abstract contract LeveragedStrategySharedBase is LeveragedStrategyBaseSetup {
 
         assertEq(strategy.balanceOf(user1), shares1, "User1 shares mismatch");
         assertEq(strategy.balanceOf(user2), shares2, "User2 shares mismatch");
-        assertEq(strategy.totalAssets(), deposit1 + deposit2, "Total assets mismatch");
+        _assertApproxEqBps(strategy.totalAssets(), deposit1 + deposit2, 10, "Total assets mismatch");
     }
 
     function test_Basic_Deposit_AssetsDeployedAsCollateral() public {

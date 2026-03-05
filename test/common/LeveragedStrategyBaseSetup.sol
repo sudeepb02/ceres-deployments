@@ -30,6 +30,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     address public constant CERES_DEPLOYER = 0xB9F4A819183BeFC31E282BC02D33cc1ab985Aa03;
 
     uint256 constant BPS_PRECISION = 10_000;
+    uint256 constant ONE_PERCENT_IN_WEI = 1e16; // 1e18 = 100%
     uint256 public CHAIN_ID;
 
     // LTV parameters - common across all protocols
@@ -38,6 +39,9 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     uint256 constant MAX_LTV_BPS = 7500; // 75%
     uint256 constant MIN_LTV_BPS = 6500; // 65%
     uint16 constant MAX_SLIPPAGE_BPS = 25; // 0.25%
+    uint16 constant DEFAULT_PERFORMANCE_FEE_BPS = 15_00;
+    uint16 constant MAX_LOSS_BPS = 2_00;
+
     uint96 constant DEPOSIT_LIMIT = 10_000_000 * 1e18; // 10 million
     uint128 constant REDEEM_LIMIT_SHARES = type(uint128).max;
 
@@ -50,7 +54,10 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     bytes32 public constant FLASH_LOAN_ROUTER_KEY = keccak256("FLASH_LOAN_ROUTER");
 
     // Common contract addresses
-    // Kyberswap
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                                  KYBER CONSTANTS                                          //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
     address public constant KYBER_SCALE_HELPER_AVAX = 0x2f577A41BeC1BE1152AeEA12e73b7391d15f655D;
     address public constant KYBER_SCALE_HELPER_ETHEREUM = 0x2f577A41BeC1BE1152AeEA12e73b7391d15f655D;
     address public constant KYBER_SCALE_HELPER_ARBITRUM = 0x2f577A41BeC1BE1152AeEA12e73b7391d15f655D;
@@ -58,6 +65,10 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     address public constant KYBERSWAP_ROUTER_AVAX = 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5;
     address public constant KYBERSWAP_ROUTER_ETHEREUM = 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5;
     address public constant KYBERSWAP_ROUTER_ARBITRUM = 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5;
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                                 PARASWAP CONSTANTS                                        //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
 
     address public constant AUGUSTUS_REGISTRY_AVAX = 0xfD1E5821F07F1aF812bB7F3102Bfd9fFb279513a;
     address public constant AUGUSTUS_REGISTRY_ETHEREUM = 0xa68bEA62Dc4034A689AA0F58A76681433caCa663;
@@ -70,16 +81,28 @@ abstract contract LeveragedStrategyBaseSetup is Test {
 
     address public constant SILO_USDC_FLASH_LOAN_PROVIDER = 0x90957Ad08D1EC15D4CCf5461444fFb0dC499EB2D;
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                                     SILO CONSTANTS                                        //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    address public constant SILO_LENS_ETHEREUM = 0xB477131cf512fE4D2F46888B7A352763a168a30C;
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+    //                                     EULER CONSTANTS                                       //
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
+    address public constant EULER_ROUTER_ETHEREUM = 0x1ada463F00833545b33A1B6551d0954Ba32be1fc;
+
     // Default test amounts (helper functions to account for different decimals)
-    function DEFAULT_DEPOSIT() internal view returns (uint256) {
+    function DEFAULT_DEPOSIT() internal view virtual returns (uint256) {
         return 10_000 * 10 ** IERC20Metadata(address(assetToken)).decimals();
     }
 
-    function LARGE_DEPOSIT() internal view returns (uint256) {
+    function LARGE_DEPOSIT() internal view virtual returns (uint256) {
         return 1_000_000 * 10 ** IERC20Metadata(address(assetToken)).decimals();
     }
 
-    function SMALL_DEPOSIT() internal view returns (uint256) {
+    function SMALL_DEPOSIT() internal view virtual returns (uint256) {
         return 100 * 10 ** IERC20Metadata(address(assetToken)).decimals();
     }
 
@@ -246,9 +269,14 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         shares = strategy.deposit(depositAmount, user);
 
         if (!_isAssetCollateral()) {
-            // Need to swap and deposit the collateral first
+            // Need to swap and deposit the collateral first.
+            // Exclude any reserved assets for swapAndDepositCollateral
             uint256 assetBalance = _balance(address(assetToken), address(strategy));
-            _swapAssetsAndDepositCollateral(assetBalance);
+            uint256 reserved = strategy.withdrawalReserve();
+            uint256 swappable = assetBalance > reserved ? assetBalance - reserved : 0;
+            if (swappable > 0) {
+                _swapAssetsAndDepositCollateral(swappable);
+            }
         }
     }
 
@@ -373,13 +401,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
             strategy.rebalance(rebalanceAmount, true, swapData);
         } else {
             // Deleverage: COLLATERAL -> DEBT
-            bytes memory swapData = _getParaswapSwapData(
-                block.chainid,
-                address(collateralToken),
-                address(debtToken),
-                rebalanceAmount,
-                "exactOut"
-            );
+            bytes memory swapData = _getCollateralToDebtSwapData(rebalanceAmount);
 
             vm.prank(keeper);
             strategy.rebalance(rebalanceAmount, false, swapData);
@@ -402,13 +424,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
             strategy.rebalanceUsingFlashLoan(rebalanceAmount, true, swapData);
         } else {
             // Deleverage: COLLATERAL -> DEBT
-            bytes memory swapData = _getParaswapSwapData(
-                block.chainid,
-                address(collateralToken),
-                address(debtToken),
-                rebalanceAmount,
-                "exactOut"
-            );
+            bytes memory swapData = _getCollateralToDebtSwapData(rebalanceAmount);
 
             vm.prank(keeper);
             strategy.rebalanceUsingFlashLoan(rebalanceAmount, false, swapData);
@@ -485,6 +501,31 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         return vm.ffi(inputs);
     }
 
+    /// @notice Build collateral -> debt swap data, selecting aggregator based on isExactOutSwapEnabled.
+    /// @dev debtAmount is always in debt-token units (the flash loan amount to repay).
+    ///      Paraswap exactOut: uses debtAmount directly as the toAmount.
+    ///      KyberSwap exactIn: converts debtAmount to collateral (+ slippage buffer) to match
+    ///      production _leverageDown: collateralForFlashLoan = _adjustForSlippage(convertDebtToCollateral(debtAmount), true)
+    function _getCollateralToDebtSwapData(uint256 debtAmount) internal returns (bytes memory) {
+        (bool isExactOutSwapEnabled, , , , , ) = strategy.getLeveragedStrategyConfig();
+        if (isExactOutSwapEnabled) {
+            // Paraswap exactOut: amount = debt tokens to receive (toAmount)
+            return
+                _getParaswapSwapData(
+                    block.chainid,
+                    address(collateralToken),
+                    address(debtToken),
+                    debtAmount,
+                    "exactOut"
+                );
+        } else {
+            // KyberSwap exactIn: amount = collateral tokens to sell (fromAmount)
+            uint256 collateralAmount = oracleAdapter.convertDebtToCollateral(debtAmount);
+            collateralAmount += (collateralAmount * _maxSlippageBps()) / BPS_PRECISION;
+            return _getKyberswapSwapData(block.chainid, address(collateralToken), address(debtToken), collateralAmount);
+        }
+    }
+
     /// @notice Rebalance using Kyberswap aggregator (exactIn only)
     function _rebalanceWithKyberAggregator(uint256 chainId, uint256 debtAmount) internal {
         // Kyber path is exactIn: DEBT -> COLLATERAL for leverage up
@@ -506,11 +547,20 @@ abstract contract LeveragedStrategyBaseSetup is Test {
         // Strategy expects debt tokens transferred from caller
         _mintAndApprove(address(debtToken), keeper, address(strategy), debtAmount);
 
-        address fromToken = isLeverageUp ? address(debtToken) : address(collateralToken);
-        address toToken = isLeverageUp ? address(collateralToken) : address(debtToken);
-        string memory swapType = isLeverageUp ? "exactIn" : "exactOut";
-
-        bytes memory swapData = _getParaswapSwapData(chainId, fromToken, toToken, debtAmount, swapType);
+        bytes memory swapData;
+        if (isLeverageUp) {
+            // Leverage up: DEBT -> COLLATERAL (always exactIn via Paraswap)
+            swapData = _getParaswapSwapData(
+                chainId,
+                address(debtToken),
+                address(collateralToken),
+                debtAmount,
+                "exactIn"
+            );
+        } else {
+            // Deleverage: COLLATERAL -> DEBT (aggregator chosen by isExactOutSwapEnabled)
+            swapData = _getCollateralToDebtSwapData(debtAmount);
+        }
 
         vm.prank(keeper);
         strategy.rebalance(debtAmount, isLeverageUp, swapData);
@@ -560,14 +610,23 @@ abstract contract LeveragedStrategyBaseSetup is Test {
     /// @notice Build default processCurrentRequest extra data when not provided
     /// @dev Supplies swap data for deleveraging and collateral->asset swaps
     function _buildProcessRequestData() internal returns (bytes memory extraData) {
-        if (_isAssetCollateral()) {
-            return "";
-        }
-
         uint256 requestId = strategy.currentRequestId();
         ICeresBaseStrategy.RequestDetails memory details = strategy.requestDetails(requestId);
         if (details.totalShares == 0) return "";
 
+        // Compute flash loan amount and swap data (common to both isAssetCollateral cases)
+        uint256 rebalanceAmount = _getRebalanceAmountForRedeem(details.totalShares);
+        bytes memory flashLoanSwapData;
+        if (rebalanceAmount > 0) {
+            flashLoanSwapData = _getCollateralToDebtSwapData(rebalanceAmount);
+        }
+
+        // isAssetCollateral = true: collateral == asset, no additional swap needed
+        if (_isAssetCollateral()) {
+            return abi.encode(rebalanceAmount, flashLoanSwapData);
+        }
+
+        // isAssetCollateral = false: also compute collateral -> asset swap data
         uint256 expectedAssets = strategy.convertToAssets(details.totalShares);
 
         uint256 idleAssets = _balance(address(assetToken), address(strategy));
@@ -593,19 +652,7 @@ abstract contract LeveragedStrategyBaseSetup is Test {
             );
         }
 
-        uint256 rebalanceAmount = _getRebalanceAmountForRedeem(details.totalShares);
-        bytes memory flashLoanSwapData;
-        if (rebalanceAmount > 0) {
-            flashLoanSwapData = _getParaswapSwapData(
-                block.chainid,
-                address(collateralToken),
-                address(debtToken),
-                rebalanceAmount,
-                "exactOut"
-            );
-        }
-
-        extraData = abi.encode(flashLoanSwapData, collateralToAssetSwapData);
+        extraData = abi.encode(rebalanceAmount, flashLoanSwapData, collateralToAssetSwapData);
     }
 
     function _isAssetCollateral() internal view returns (bool) {

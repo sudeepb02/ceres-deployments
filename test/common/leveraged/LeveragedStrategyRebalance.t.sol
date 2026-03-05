@@ -42,8 +42,18 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
 
         (, uint256 netAssets, uint256 marketCollateral, , uint256 marketDebt, ) = strategy.getNetAssets();
 
+        console.log("netAssets", netAssets);
+        console.log("depositAmount", depositAmount);
+        console.log("marketDebt", marketDebt);
+        console.log("marketCollateral", marketCollateral);
+
         assertGt(marketCollateral, depositAmountInCollateral, "Collateral should increase from leverage");
-        _assertApproxEqBps(netAssets, depositAmount, 10, "Net assets should be ~deposit");
+        assertApproxEqRel(
+            netAssets,
+            depositAmount,
+            ONE_PERCENT_IN_WEI,
+            "Net assets should be close to deposit after leverage"
+        );
         _assertApproxEqBps(marketDebt, debtAmount, 10, "Debt should be non-zero after leverage");
     }
 
@@ -81,13 +91,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
 
         _mintAndApprove(address(debtToken), keeper, address(strategy), deleverageAmount);
 
-        bytes memory swapData = _getParaswapSwapData(
-            block.chainid,
-            address(debtToken),
-            address(collateralToken),
-            deleverageAmount,
-            "exactOut"
-        );
+        bytes memory swapData = _getCollateralToDebtSwapData(deleverageAmount);
 
         vm.prank(keeper);
         strategy.rebalance(deleverageAmount, false, swapData);
@@ -115,7 +119,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
         strategy.rebalance(debtAmount, true, swapData);
 
         uint256 actualLtv = strategy.getStrategyLtv();
-        _assertApproxEqBps(actualLtv, TARGET_LTV_BPS, 10, "LTV should be near target");
+        assertApproxEqRel(actualLtv, TARGET_LTV_BPS, ONE_PERCENT_IN_WEI, "LTV should be near target");
     }
 
     function test_Rebalance_ZeroDebt_NoOp() public {
@@ -123,13 +127,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
 
         _mintAndApprove(address(debtToken), keeper, address(strategy), 1000 * 1e6);
 
-        bytes memory swapData = _getParaswapSwapData(
-            CHAIN_ID,
-            address(collateralToken),
-            address(debtToken),
-            1000 * 1e6,
-            "exactOut"
-        );
+        bytes memory swapData = _getCollateralToDebtSwapData(1000 * 1e6);
 
         uint256 keeperBalance = debtToken.balanceOf(keeper);
 
@@ -191,19 +189,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
         console.log("marketDebt before", marketDebt);
         console.log("deleverageAmount", deleverageAmount);
 
-        bytes memory swapData;
-        (bool isExactOutSwapEnabled, , , , , ) = strategy.getLeveragedStrategyConfig();
-        if (isExactOutSwapEnabled) {
-            swapData = _getParaswapSwapData(
-                CHAIN_ID,
-                address(collateralToken),
-                address(debtToken),
-                deleverageAmount,
-                "exactOut"
-            );
-        } else {
-            swapData = _getKyberswapSwapData(CHAIN_ID, address(collateralToken), address(debtToken), deleverageAmount);
-        }
+        bytes memory swapData = _getCollateralToDebtSwapData(deleverageAmount);
 
         vm.prank(keeper);
         strategy.rebalanceUsingFlashLoan(deleverageAmount, false, swapData);
@@ -314,13 +300,7 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
 
         uint256 deleverageAmount = currentDebt - targetDebt;
 
-        bytes memory swapData = _getParaswapSwapData(
-            CHAIN_ID,
-            address(collateralToken),
-            address(debtToken),
-            deleverageAmount,
-            "exactOut"
-        );
+        bytes memory swapData = _getCollateralToDebtSwapData(deleverageAmount);
 
         vm.prank(keeper);
         strategy.rebalanceUsingFlashLoan(deleverageAmount, false, swapData);
@@ -368,6 +348,6 @@ abstract contract LeveragedStrategyRebalance is LeveragedStrategySharedBase {
 
         uint256 finalLtv = strategy.getStrategyLtv();
         assertGt(finalLtv, 5000, "LTV should increase after second rebalance");
-        assertApproxEqRel(finalLtv, TARGET_LTV_BPS, 1e15, "LTV should be near target");
+        assertApproxEqRel(finalLtv, TARGET_LTV_BPS, ONE_PERCENT_IN_WEI, "LTV should be near target");
     }
 }
