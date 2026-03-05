@@ -80,10 +80,6 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
 
     EulerOracleAdapter public eulerOracleAdapter;
 
-    MockPriceOracle public mockCollateralToAssetOracle;
-    MockPriceOracle public mockAssetToUsdOracle;
-    MockPriceOracle public mockDebtToUsdOracle;
-
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   SETUP OVERRIDE                                         //
     ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -143,31 +139,6 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
 
         // Setup mock oracle contracts for testing price changes
         console.log("Setting up mock oracles for testing...");
-
-        {
-            // Mock collateral to asset oracle
-            mockCollateralToAssetOracle = new MockPriceOracle(
-                eulerOracleAdapter.getCollateralPriceInAssetToken(),
-                0,
-                COLLATERAL_TOKEN,
-                ASSET_TOKEN
-            );
-        }
-
-        {
-            // Mock asset to USD oracle
-            mockAssetToUsdOracle = new MockPriceOracle(
-                eulerOracleAdapter.getAssetPriceInUsd(),
-                0,
-                ASSET_TOKEN,
-                USD_TOKEN
-            );
-        }
-
-        {
-            // Mock debt to USD oracle
-            mockDebtToUsdOracle = new MockPriceOracle(eulerOracleAdapter.getDebtPriceInUsd(), 0, DEBT_TOKEN, USD_TOKEN);
-        }
     }
 
     function _setupSwapper() internal override {
@@ -260,6 +231,10 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
         strategy.updateConfig(MAX_SLIPPAGE_BPS, 15_00, 0);
         strategy.setDepositWithdrawLimits(DEPOSIT_LIMIT, REDEEM_LIMIT_SHARES, 0);
 
+        // Paraswap exactOut is registered for collateral->debt swaps in _setupSwapper,
+        // so enable exactOut mode to keep swap data generation and router selection in sync.
+        strategy.setExactOutSwapEnabled(true);
+
         vm.stopPrank();
     }
 
@@ -277,7 +252,27 @@ contract AvusdSavusdUsdcSetup is LeveragedStrategyBaseSetup {
     }
 
     function _simulateCollateralPriceChange(int256 percentChange) internal override {
-        // @todo
+        // Deploy a fresh mock with the percentage change baked in as an immutable.
+        // This is required because vm.mockFunction executes the mock's bytecode in the storage
+        // context of the callee (Euler Router). Immutables are embedded in bytecode so they are
+        // unaffected by the storage context switch, whereas mutable state variables would read
+        // from the callee's storage slots and return unexpected values.
+        MockPriceOracle mockOracle = new MockPriceOracle(
+            eulerOracleAdapter.getCollateralPriceInAssetToken(),
+            0,
+            COLLATERAL_TOKEN,
+            ASSET_TOKEN,
+            percentChange
+        );
+        vm.mockFunction(
+            COLLATERAL_TO_ASSET_ORACLE,
+            address(mockOracle),
+            abi.encodeWithSelector(IEulerOracle.getQuote.selector)
+        );
+    }
+
+    function tearDown() public virtual {
+        vm.clearMockedCalls();
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////

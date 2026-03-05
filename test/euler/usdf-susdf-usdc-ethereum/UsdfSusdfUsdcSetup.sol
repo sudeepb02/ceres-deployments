@@ -40,7 +40,7 @@ contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
     address public constant COLLATERAL_VAULT = 0x2F849ba554C1ea2eDe9C240Bbe9d247dd6eC8A6B;
     address public constant DEBT_VAULT = 0x3573A84Bee11D49A1CbCe2b291538dE7a7dD81c6;
 
-    address public constant COLLATERAL_TO_ASSET_ORACLE = 0x1ada463F00833545b33A1B6551d0954Ba32be1fc;
+    address public constant COLLATERAL_TO_ASSET_ORACLE = EULER_ROUTER_ETHEREUM;
     address public constant ASSET_TO_USD_ORACLE = 0xEd8e9151602E40233D358d6C323d9F9717a1bec4;
     address public constant DEBT_TO_USD_ORACLE = 0xD35657aE033A86FFa8fc6Bc767C5eb57C7c3D4B8;
 
@@ -81,10 +81,6 @@ contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
     // IEulerOracle public eulerOracle = IEulerOracle(EULER_ORACLE_ROUTER); // Euler oracle router address
 
     EulerOracleAdapter public eulerOracleAdapter;
-
-    MockPriceOracle public mockCollateralToAssetOracle;
-    MockPriceOracle public mockAssetToUsdOracle;
-    MockPriceOracle public mockDebtToUsdOracle;
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     //                                   SETUP OVERRIDE                                         //
@@ -142,34 +138,6 @@ contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
         oracleAdapter = IOracleAdapter(address(eulerOracleAdapter));
 
         console.log("Euler Oracle Adapter deployed at:", address(eulerOracleAdapter));
-
-        // Setup mock oracle contracts for testing price changes
-        console.log("Setting up mock oracles for testing...");
-
-        {
-            // Mock collateral to asset oracle
-            mockCollateralToAssetOracle = new MockPriceOracle(
-                eulerOracleAdapter.getCollateralPriceInAssetToken(),
-                0,
-                COLLATERAL_TOKEN,
-                ASSET_TOKEN
-            );
-        }
-
-        {
-            // Mock asset to USD oracle
-            mockAssetToUsdOracle = new MockPriceOracle(
-                eulerOracleAdapter.getAssetPriceInUsd(),
-                0,
-                ASSET_TOKEN,
-                USD_TOKEN
-            );
-        }
-
-        {
-            // Mock debt to USD oracle
-            mockDebtToUsdOracle = new MockPriceOracle(eulerOracleAdapter.getDebtPriceInUsd(), 0, DEBT_TOKEN, USD_TOKEN);
-        }
     }
 
     function _setupSwapper() internal override {
@@ -274,7 +242,27 @@ contract UsdfSusdfUsdcSetup is LeveragedStrategyBaseSetup {
     }
 
     function _simulateCollateralPriceChange(int256 percentChange) internal override {
-        // @todo
+        // Deploy a fresh mock with the percentage change baked in as an immutable.
+        // This is required because vm.mockFunction executes the mock's bytecode in the storage
+        // context of the callee (Euler Router). Immutables are embedded in bytecode so they are
+        // unaffected by the storage context switch, whereas mutable state variables would read
+        // from the callee's storage slots and return unexpected values.
+        MockPriceOracle mockOracle = new MockPriceOracle(
+            eulerOracleAdapter.getCollateralPriceInAssetToken(),
+            0,
+            COLLATERAL_TOKEN,
+            ASSET_TOKEN,
+            percentChange
+        );
+        vm.mockFunction(
+            COLLATERAL_TO_ASSET_ORACLE,
+            address(mockOracle),
+            abi.encodeWithSelector(IEulerOracle.getQuote.selector)
+        );
+    }
+
+    function tearDown() public virtual {
+        vm.clearMockedCalls();
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
